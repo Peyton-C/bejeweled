@@ -148,7 +148,12 @@ def _rip(args) -> int:
 
     detected = stem_set.extra.get("countin")
     if detected:
-        note = " (backed off to keep a pickup)" if detected.clipped_pickup else ""
+        notes = []
+        if detected.kept_pickup:
+            notes.append("backed off to keep a pickup")
+        if detected.muted:
+            notes.append(f"silenced {detected.muted:.3f}s of clicks")
+        note = f" ({', '.join(notes)})" if notes else ""
         print(f"  trimmed {detected.beats}-beat count-in "
               f"at {detected.trim_at:.3f}s{note}")
     elif not args.keep_countin:

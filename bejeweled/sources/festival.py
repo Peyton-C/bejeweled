@@ -337,11 +337,14 @@ def fetch_master(track: dict, work_dir: str, keys_path: str | None = None,
 
 def split_stems(master_audio: str, out_dir: str, fmt: str = "wav",
                 parts: list[str] | None = None, trim_start: float = 0.0,
-                max_duration: float | None = None, ffmpeg: str | None = None) -> list[Stem]:
+                max_duration: float | None = None, ffmpeg: str | None = None,
+                mute: dict[str, float] | None = None) -> list[Stem]:
     """Split the 10-channel master into five stereo stems.
 
     `parts` names the stems in channel order, as the track's manifest declares them;
-    without it the catalogue-wide default order is assumed.
+    without it the catalogue-wide default order is assumed. `mute` silences the opening
+    of a named stem, measured from the trimmed start, which is how count-in clicks that
+    outlast the cut are removed.
     """
     ffmpeg = ff.find_ffmpeg(ffmpeg)
     os.makedirs(out_dir, exist_ok=True)
@@ -365,10 +368,14 @@ def split_stems(master_audio: str, out_dir: str, fmt: str = "wav",
     # and the resampler rejects that as an input layout, so nothing downstream can
     # read the stems back in. Relabelling after the fact does not help; the layout has
     # to be correct at the point the pair is assembled.
-    merges = ";".join(
-        f"[{left}][{right}]join=inputs=2:channel_layout=stereo[{name.lower()}]"
-        for name, left, right in pairs
-    )
+    chains = []
+    for name, left, right in pairs:
+        chain = f"[{left}][{right}]join=inputs=2:channel_layout=stereo"
+        silence = (mute or {}).get(name, 0.0)
+        if silence > 0:
+            chain += f",volume=0:enable='lt(t,{silence:.6f})'"
+        chains.append(f"{chain}[{name.lower()}]")
+    merges = ";".join(chains)
 
     cmd = [ffmpeg, "-y"]
     if max_duration:
@@ -391,8 +398,7 @@ def _detect_countin(master_audio: str, track: dict, ffmpeg: str | None):
     """Split just the opening bars to a scratch directory and look for the count-in."""
     import tempfile
 
-    beat = 60.0 / track["bpm"]
-    window = beat * (max(countin.PLAUSIBLE_BEATS) + 4)
+    window = countin.search_window(track["bpm"])
     with tempfile.TemporaryDirectory(prefix="bejeweled-countin-") as scratch:
         preview = split_stems(master_audio, scratch, "wav", track.get("parts"),
                               0.0, window, ffmpeg)
@@ -432,8 +438,9 @@ def rip(track: dict, out_dir: str, keys_path: str | None = None, fmt: str = "wav
     if trim_countin and track.get("bpm"):
         detected = _detect_countin(master_audio, track, ffmpeg)
 
+    mute = {countin.CLICK_STEM: detected.muted} if detected else None
     stems = split_stems(master_audio, out_dir, fmt, track.get("parts"),
-                        detected.trim_at if detected else 0.0, None, ffmpeg)
+                        detected.trim_at if detected else 0.0, None, ffmpeg, mute)
     os.remove(master_audio)
 
     title = track["title"]
