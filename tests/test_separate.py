@@ -270,6 +270,14 @@ def test_missing_demucs_says_how_to_install_it(monkeypatch):
         dm.find_demucs()
 
 
+def test_rocm_tuning_is_a_default_the_user_can_override(monkeypatch):
+    monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+    monkeypatch.setenv("MIOPEN_FIND_MODE", "NORMAL")
+    env = dm.environment()
+    assert env["GLIBC_TUNABLES"] == "glibc.malloc.hugetlb=1"
+    assert env["MIOPEN_FIND_MODE"] == "NORMAL"
+
+
 def test_a_killed_demucs_says_so(tmp_path):
     """Killed for memory, demucs prints nothing, so its startup chatter is not the error."""
     script = tmp_path / "killed"

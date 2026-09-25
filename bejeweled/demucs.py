@@ -67,7 +67,7 @@ def separate(demucs: str, inputs: list[str], out_dir: str, model: str = DEFAULT_
            "-o", out_dir]
     if device:
         cmd += ["-d", device]
-    run(cmd + list(inputs), progress, len(inputs))
+    run(cmd + list(inputs), progress, len(inputs), env=environment())
 
     model_dir = os.path.join(out_dir, model)
     found = {}
@@ -83,17 +83,36 @@ def separate(demucs: str, inputs: list[str], out_dir: str, model: str = DEFAULT_
     return found
 
 
+def environment() -> dict[str, str]:
+    """The environment demucs runs in, tuned for ROCm without overriding the user.
+
+    Importing PyTorch's ROCm build reads every GPU library it ships into fresh memory,
+    12.5 GB on torch 2.13 + ROCm 7.1, which took 10.3 s on an RX 9070 XT almost
+    entirely in 2.9 million page faults. Backing malloc with huge pages cut that to
+    5.8 s and 68 thousand faults. glibc elsewhere ignores the tunable, as does macOS.
+
+    MIOpen's fast kernel selection took a warm separation of a 296 s track from 10.6 s
+    to 9.4 s. Its output differed from the default search by at most 1.9e-5 against a
+    peak of 5.4, about -109 dB, and was bit-identical between runs, which --shifts 0
+    exists to guarantee. Only ROCm reads it.
+    """
+    env = dict(os.environ)
+    env.setdefault("GLIBC_TUNABLES", "glibc.malloc.hugetlb=1")
+    env.setdefault("MIOPEN_FIND_MODE", "FAST")
+    return env
+
+
 _PERCENT = re.compile(r"(\d+)%\|")
 
 
-def run(cmd: list[str], progress=None, tracks: int = 1) -> None:
+def run(cmd: list[str], progress=None, tracks: int = 1, env: dict | None = None) -> None:
     """Run demucs, reporting its progress bars and surfacing its output on failure.
 
     `progress(done, total)` is called with whole-job percentages. demucs draws one bar
     per input and carriage-returns within it, so completed bars are counted to place
     the current one within the whole job.
     """
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     tail, buf, finished, last = [], b"", 0, 0
     while True:
         chunk = proc.stdout.read1(4096)
