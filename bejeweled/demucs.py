@@ -34,14 +34,11 @@ def find_demucs(explicit: str | None = None) -> str:
 
 
 def _runs(path: str) -> bool:
-    try:
-        # Importing torch is slow, so this gets longer than the FFmpeg probe
-        result = subprocess.run(
-            [path, "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    """Whether this is an executable file. Unlike FFmpeg it is not run to check, since
+    that imports torch, which took 11 seconds on ROCm, once per file in a batch. A
+    broken install still fails on the real run, with demucs's own error."""
+    resolved = shutil.which(path)
+    return bool(resolved) and os.path.isfile(resolved) and os.access(resolved, os.X_OK)
 
 
 def default_device() -> str | None:

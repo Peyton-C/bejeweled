@@ -22,7 +22,7 @@ The `soundfile` extra is required, the published package leaves out a dependency
 On Linux with an AMD GPU, install demucs against PyTorch's ROCm build instead, using the index URL the PyTorch install selector gives for your ROCm version. ROCm presents itself as `cuda`, so demucs picks the GPU without being told.
 
 ```sh
-uv tool install demucs --with soundfile --index https://download.pytorch.org/whl/rocm6.4
+uv tool install demucs --with soundfile --index https://download.pytorch.org/whl/rocm7.1
 ```
 
 ## Stems
