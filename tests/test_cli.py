@@ -52,9 +52,15 @@ def test_formats_are_the_two_intended_outputs():
 
 def test_separate_takes_a_file_and_the_shared_output_options(parser):
     args = parser.parse_args(["separate", "song.flac", "--format", "files", "--layout", "5.1"])
-    assert (args.command, args.file, args.format, args.layout) == (
-        "separate", "song.flac", "files", "5.1")
+    assert (args.command, args.files, args.format, args.layout) == (
+        "separate", ["song.flac"], "files", "5.1")
     assert parser.parse_args(["separate", "song.flac"]).layout is None
+    # What a shell wildcard expands to
+    assert parser.parse_args(["separate", "a.wav", "b.wav", "albums/"]).files == [
+        "a.wav", "b.wav", "albums/"]
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["separate"])
 
     with pytest.raises(SystemExit):
         parser.parse_args(["separate", "song.flac", "--layout", "hexagonal"])

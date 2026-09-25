@@ -5,7 +5,11 @@ bejeweled splits any mixed song into stems with demucs, the model stemgen is bui
 bejeweled separate "Song.flac"
 bejeweled separate "Song.flac" --format files
 bejeweled separate "Song (Atmos).wav" --layout 7.1.4
+bejeweled separate ~/Music/Atmos/                   # every song in a folder
+bejeweled separate ~/Music/Atmos/*.wav
 ```
+
+A folder is read one level deep. In a batch a file that fails is reported and skipped, and the failures are listed again at the end.
 
 demucs is not installed with bejeweled, because it brings several gigabytes of PyTorch with it. Install it yourself, and point `BEJEWELED_DEMUCS` at it if it is not on your `PATH`.
 
@@ -14,6 +18,12 @@ uv tool install demucs --with soundfile
 ```
 
 The `soundfile` extra is required, the published package leaves out a dependency it needs to run.
+
+On Linux with an AMD GPU, install demucs against PyTorch's ROCm build instead, using the index URL the PyTorch install selector gives for your ROCm version. ROCm presents itself as `cuda`, so demucs picks the GPU without being told.
+
+```sh
+uv tool install demucs --with soundfile --index https://download.pytorch.org/whl/rocm6.4
+```
 
 ## Stems
 demucs gives four stems, which map one to one onto the stem format's slots. Title, artist, album, year, BPM, key and cover art are read from the file's own tags, and the title falls back to the file name.

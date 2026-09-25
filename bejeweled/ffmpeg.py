@@ -48,8 +48,13 @@ def probe(ffmpeg: str, path: str) -> dict:
     """ffprobe's view of a file: its streams, and its format-level tags."""
     import json
 
-    result = run([find_ffprobe(ffmpeg), "-v", "error", "-show_streams", "-show_format",
-                  "-of", "json", path])
+    # Kept apart from stderr, which run() merges in, so a failure is not reported
+    # with ffprobe's empty JSON wrapped around it
+    result = subprocess.run([find_ffprobe(ffmpeg), "-v", "error", "-show_streams",
+                             "-show_format", "-of", "json", path], capture_output=True)
+    if result.returncode != 0:
+        lines = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise FFmpegError("\n".join(lines[-12:]) or f"exit {result.returncode}")
     return json.loads(result.stdout)
 
 

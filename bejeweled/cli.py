@@ -54,12 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
                        help="keep Festival's metronome count-in")
 
     p_sep = sub.add_parser("separate", help="split a mixed song into stems with demucs")
-    p_sep.add_argument("file", help="stereo song, or a multichannel render")
+    p_sep.add_argument("files", nargs="+",
+                       help="songs or multichannel renders, or folders of them")
     _add_output_options(p_sep)
     p_sep.add_argument("--layout", choices=list(LAYOUTS),
                        help="channel layout of a multichannel file (default: by channel count)")
     p_sep.add_argument("--model", help="demucs model (default: htdemucs)")
-    p_sep.add_argument("--device", help="cpu, cuda or mps (default: mps on Apple Silicon)")
+    p_sep.add_argument("--device",
+                       help="cpu, cuda or mps, ROCm counts as cuda (default: mps on Apple "
+                            "Silicon, otherwise whatever demucs picks)")
     p_sep.add_argument("--suffix", help="appended to the title instead of '(DE)'")
     p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
@@ -197,13 +200,51 @@ def _rip(args) -> int:
 
 
 def _separate(args) -> int:
+    from .sources import local
+
+    files = []
+    for target in args.files:
+        if os.path.isdir(target):
+            # One level only, so pointing at a library root does not quietly queue
+            # every album in it
+            files += sorted(
+                os.path.join(target, name) for name in os.listdir(target)
+                if not name.startswith(".")
+                and os.path.splitext(name)[1].lower() in local.AUDIO_EXTENSIONS
+            )
+        else:
+            files.append(target)
+    if not files:
+        raise ValueError(f"no audio files in {', '.join(args.files)}")
+
+    cfg = config.load()
+    if len(files) == 1:
+        return _separate_one(files[0], args, cfg)
+
+    # A batch carries on past a bad file rather than losing the rest of the run
+    failed = []
+    for number, path in enumerate(files, 1):
+        print(f"[{number}/{len(files)}] {os.path.basename(path)}")
+        try:
+            _separate_one(path, args, cfg)
+        except (FFmpegError, DemucsError, ValueError, RuntimeError, FileNotFoundError) as e:
+            print(f"\n  error: {e}", file=sys.stderr)
+            failed.append(path)
+    if failed:
+        print(f"\n{len(failed)} of {len(files)} failed:", file=sys.stderr)
+        for path in failed:
+            print(f"  {path}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _separate_one(path, args, cfg) -> int:
     from . import demucs as dm
     from .sources import separate
 
-    cfg = config.load()
     sep_cfg = cfg.get("separate", {})
     out_dir = os.path.abspath(args.out)
-    base = os.path.splitext(os.path.basename(args.file))[0]
+    base = os.path.splitext(os.path.basename(path))[0]
     work = os.path.join(out_dir, f"{_safe(base)} - stems")
 
     last = [-1]
@@ -215,7 +256,7 @@ def _separate(args) -> int:
             print(f"\r  separating {percent}%", end="", flush=True)
 
     stem_set = separate.separate(
-        args.file, work, layout=args.layout,
+        path, work, layout=args.layout,
         model=args.model or sep_cfg.get("model", dm.DEFAULT_MODEL),
         device=args.device or sep_cfg.get("device") or dm.default_device(),
         progress=progress,
@@ -249,7 +290,7 @@ def _separate(args) -> int:
         colors=_colors(args, cfg),
     )
     written = [s.path for s in stem_set.stems] + [stem_set.cover]
-    if stem_set.master != os.path.abspath(args.file):
+    if stem_set.master != os.path.abspath(path):
         written.append(stem_set.master)
     for path in written:
         if path and os.path.exists(path):
