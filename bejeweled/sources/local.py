@@ -37,7 +37,7 @@ def from_folder(folder: str, title: str | None = None, artist: str | None = None
     kept under its own name rather than dropped, and folding happens at write time.
     """
     if not os.path.isdir(folder):
-        raise NotADirectoryError(folder)
+        raise FileNotFoundError(f"no such folder: {folder}")
 
     stems, master = [], None
     for entry in sorted(os.listdir(folder)):

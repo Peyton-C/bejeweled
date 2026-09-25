@@ -35,6 +35,24 @@ def _runs(path: str) -> bool:
         return False
 
 
+def find_ffprobe(ffmpeg: str) -> str:
+    """The ffprobe that shipped alongside this FFmpeg, falling back to PATH."""
+    sibling = os.path.join(os.path.dirname(ffmpeg), "ffprobe")
+    for candidate in (sibling, shutil.which("ffprobe")):
+        if candidate and _runs(candidate):
+            return candidate
+    raise FFmpegError("ffprobe not found. It ships with FFmpeg, so reinstalling FFmpeg should fix it.")
+
+
+def probe(ffmpeg: str, path: str) -> dict:
+    """ffprobe's view of a file: its streams, and its format-level tags."""
+    import json
+
+    result = run([find_ffprobe(ffmpeg), "-v", "error", "-show_streams", "-show_format",
+                  "-of", "json", path])
+    return json.loads(result.stdout)
+
+
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
     """Run FFmpeg, surfacing its output on failure instead of discarding it."""
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

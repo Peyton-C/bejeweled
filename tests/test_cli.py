@@ -50,6 +50,16 @@ def test_formats_are_the_two_intended_outputs():
     assert set(FORMATS) == {"ni-stem", "files"}
 
 
+def test_separate_takes_a_file_and_the_shared_output_options(parser):
+    args = parser.parse_args(["separate", "song.flac", "--format", "files", "--layout", "5.1"])
+    assert (args.command, args.file, args.format, args.layout) == (
+        "separate", "song.flac", "files", "5.1")
+    assert parser.parse_args(["separate", "song.flac"]).layout is None
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["separate", "song.flac", "--layout", "hexagonal"])
+
+
 def test_stem_file_verbs_stay_top_level(parser):
     """These act on stem files whatever produced them, so they are not source-scoped."""
     assert parser.parse_args(["info", "a.stem.mp4"]).files == ["a.stem.mp4"]

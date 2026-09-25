@@ -19,18 +19,24 @@ uv run bejeweled --help
 
 FFmpeg is taken from your `PATH`. Set `BEJEWELED_FFMPEG` to override it.
 
+`bejeweled separate` also needs demucs, which is not installed with bejeweled, see [Separation](docs/separate.md).
+
 ## Use
 
 ```sh
+bejeweled separate "Song.flac"                      # split any song with demucs
+bejeweled separate "Song (Atmos).wav"               # a surround or Atmos render
+
+bejeweled convert ./my-stems/        # build a stem file from a folder of stems
+
+bejeweled info track.stem.mp4        # show a stem file's metadata
+
 bejeweled festival list                  # browse Fortnite Festival's catalogue
 bejeweled festival list "chappell roan"
 
 bejeweled festival rip "Kill Bill"                  # -> Kill Bill (FN).stem.mp4
 bejeweled festival rip "Kill Bill" --format files   # separate stems, no container
 bejeweled festival rip "Kill Bill" --no-suffix      # drop the title marker
-
-bejeweled convert ./my-stems/        # build a stem file from a folder of stems
-bejeweled info track.stem.mp4        # show a stem file's metadata
 ```
 
 Each source is its own subcommand, so `bejeweled festival --help` lists what Festival takes. Settings that would otherwise be typed every time live in a config file, written with `bejeweled config --init`.
@@ -39,14 +45,13 @@ Each source is its own subcommand, so `bejeweled festival --help` lists what Fes
 
 | Doc | Covers |
 | --- | --- |
+| [Separation](docs/separate.md) | Splitting any song with demucs, including 5.1 and Dolby Atmos renders |
 | [Fortnite Festival](docs/festival.md) | Ripping tracks, the metadata Festival provides, and the count-in it puts on every song |
 | [Native Instruments stems](docs/ni.md) | What a `.stem.mp4` contains, which codecs work where, and what bejeweled writes inside it |
 
 ## Colours
 
-Mixxx reads the colour of each stem out of the file, so the palette written here is
-what appears on screen. That makes it an accessibility setting rather than decoration,
-and it is configurable throughout.
+Mixxx reads the colour of each stem out of the file, so the palette written here is what appears on screen.
 
 ```sh
 bejeweled palette                                   # measure the built-in palettes
@@ -56,13 +61,9 @@ bejeweled festival rip "Kill Bill" --palette vivid-dark
 bejeweled recolor *.stem.mp4 --palette vivid-dark
 ```
 
-Some skins give each deck its own background — Deere's are `#333941` and `#413C33` —
-so several can be configured and a palette is judged on its worst one. This matters:
-the default `okabe-ito` palette drops to 2.83:1 on Deere's decks, below the 3:1 floor,
-because those backgrounds are lighter than the dark skins it was chosen against.
+Some skins give each deck its own background, Deere's are `#333941` and `#413C33`, so several can be configured and a palette is judged on its worst one. This matters: the default `okabe-ito` palette drops to 2.83:1 on Deere's decks, below the 3:1 floor, because those backgrounds are lighter than the dark skins it was chosen against.
 
-`recolor` rewrites only the metadata atom, so it is instant on any file size and does
-not re-encode the audio. It works on stem files from any tool, not just this one.
+`recolor` rewrites only the metadata atom, so it is instant on any file size and does not re-encode the audio. It works on stem files from any tool, not just this one.
 
 Two separate things decide whether a palette works, and they need different measures:
 

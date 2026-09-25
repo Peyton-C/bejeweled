@@ -20,6 +20,11 @@ A source that fetched the audio itself marks titles by default. A source reading
 the user supplied does not, because they know what it is, but the marker is still there
 to switch on: someone converting their Engine DJ stems may well want that recorded.
 
+Separating counts as bejeweled producing the audio. The song was the user's, but the
+stems are demucs output and must not pass for real stems, so `separate` marks by
+default: `(DE)` from stereo, `(DE SR)` from surround, `(DE AT)` from Atmos. A marker
+names the input, never the output, and avoids wording that suggests generative AI.
+
 ## What goes where
 
 `README.md` is what a user needs to get in and pointed the right way, nothing more. It

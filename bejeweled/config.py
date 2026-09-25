@@ -51,6 +51,19 @@ backgrounds = ["#1E1E1E"]
 # Record which tool and which source produced the file, in the comment field.
 write_comment = true
 
+[separate]
+# The demucs model. htdemucs_ft is slightly cleaner and four times slower.
+model = "htdemucs"
+
+# cpu, cuda or mps. Left unset, Apple Silicon uses mps and anything else lets
+# demucs choose.
+# device = "mps"
+
+# Mark separated titles so they are not mistaken for real stems: (DE) from a
+# stereo file, (DE SR) from a surround mix, (DE AT) from an Atmos render. Setting
+# title_suffix here replaces all three.
+mark_titles = true
+
 [festival]
 # Epic's key database. Not distributed with this project.
 # keys = "~/.config/bejeweled/keys.bin"

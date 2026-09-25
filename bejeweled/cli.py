@@ -6,7 +6,9 @@ import os
 import sys
 
 from . import __version__, config, palette as pal
+from .demucs import DemucsError
 from .ffmpeg import FFmpegError
+from .sources.separate import LAYOUTS
 from .stems import NI_SLOTS
 from .writers import ni_stem
 
@@ -51,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     f_rip.add_argument("--keep-countin", action="store_true",
                        help="keep Festival's metronome count-in")
 
+    p_sep = sub.add_parser("separate", help="split a mixed song into stems with demucs")
+    p_sep.add_argument("file", help="stereo song, or a multichannel render")
+    _add_output_options(p_sep)
+    p_sep.add_argument("--layout", choices=list(LAYOUTS),
+                       help="channel layout of a multichannel file (default: by channel count)")
+    p_sep.add_argument("--model", help="demucs model (default: htdemucs)")
+    p_sep.add_argument("--device", help="cpu, cuda or mps (default: mps on Apple Silicon)")
+    p_sep.add_argument("--suffix", help="appended to the title instead of '(DE)'")
+    p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
+
     # --- verbs that act on stem files, whatever produced them ---
     p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems")
     p_conv.add_argument("folder")
@@ -85,13 +97,13 @@ def main(argv: list[str] | None = None) -> int:
         handler = {"rip": _rip, "list": _list}[args.action]
     else:
         handler = {
-            "convert": _convert, "recolor": _recolor,
+            "separate": _separate, "convert": _convert, "recolor": _recolor,
             "palette": _palette, "info": _info, "config": _config,
         }[args.command]
 
     try:
         return handler(args)
-    except (FFmpegError, ValueError, RuntimeError, FileNotFoundError) as e:
+    except (FFmpegError, DemucsError, ValueError, RuntimeError, FileNotFoundError) as e:
         # Lead with a newline so the message is not swallowed by a \r progress line
         print(f"\nerror: {e}", file=sys.stderr)
         return 1
@@ -179,6 +191,69 @@ def _rip(args) -> int:
         os.remove(stem.path)
     if stem_set.cover and os.path.exists(stem_set.cover):
         os.remove(stem_set.cover)
+    os.rmdir(work)
+    print(f"wrote {out_path}")
+    return 0
+
+
+def _separate(args) -> int:
+    from . import demucs as dm
+    from .sources import separate
+
+    cfg = config.load()
+    sep_cfg = cfg.get("separate", {})
+    out_dir = os.path.abspath(args.out)
+    base = os.path.splitext(os.path.basename(args.file))[0]
+    work = os.path.join(out_dir, f"{_safe(base)} - stems")
+
+    last = [-1]
+
+    def progress(done, total):
+        percent = done * 100 // total
+        if percent != last[0]:
+            last[0] = percent
+            print(f"\r  separating {percent}%", end="", flush=True)
+
+    stem_set = separate.separate(
+        args.file, work, layout=args.layout,
+        model=args.model or sep_cfg.get("model", dm.DEFAULT_MODEL),
+        device=args.device or sep_cfg.get("device") or dm.default_device(),
+        progress=progress,
+    )
+    print()
+
+    layout = stem_set.extra["layout"]
+    groups = stem_set.extra["groups"]
+    if len(groups) > 1:
+        print(f"  read as {layout}, separated in {len(groups)} groups: {', '.join(groups)}")
+
+    marker = separate.title_marker(layout)
+    suffix = None if args.no_suffix else (args.suffix or config.title_suffix(
+        separate.SOURCE_NAME, marker, separate.MARK_TITLES_BY_DEFAULT, cfg))
+    if suffix:
+        stem_set.title = f"{stem_set.title} {suffix}"
+    if cfg.get("metadata", {}).get("write_comment", True):
+        stem_set.comment = stem_set.describe_source(__version__)
+
+    fmt = args.format or cfg.get("output", {}).get("format", "ni-stem")
+    if fmt == "files":
+        print(f"wrote {len(stem_set.stems)} stems to {work}")
+        return 0
+
+    out_path = os.path.join(out_dir, f"{_safe(stem_set.title)}.stem.mp4")
+    ni_stem.write(
+        stem_set, out_path,
+        codec=args.codec or cfg.get("output", {}).get("codec", "aac"),
+        sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
+        merge=separate.NI_MERGE,
+        colors=_colors(args, cfg),
+    )
+    written = [s.path for s in stem_set.stems] + [stem_set.cover]
+    if stem_set.master != os.path.abspath(args.file):
+        written.append(stem_set.master)
+    for path in written:
+        if path and os.path.exists(path):
+            os.remove(path)
     os.rmdir(work)
     print(f"wrote {out_path}")
     return 0

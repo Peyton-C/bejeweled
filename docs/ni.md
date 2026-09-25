@@ -36,7 +36,9 @@ bejeweled writes the title, artist, year, key, BPM, cover art and a provenance c
 
 Where bejeweled obtained the audio rather than the user, the title also gets a marker, `(FN)` for Fortnite Festival. Mixes of the same song can differ between platforms, so the marker keeps them apart in a library instead of letting one quietly stand in for the other.
 
-Audio you supplied yourself is not marked, you already know what it is, but you can ask for one with `--suffix` if you want the origin recorded anyway.
+Stems bejeweled separated itself are marked too, `(DE)` and its variants, so a separation never passes for real stems. See [Separation](separate.md).
+
+Stems you supplied yourself are not marked, you already know what they are, but you can ask for one with `--suffix` if you want the origin recorded anyway.
 
 ## Inside the file
 The format is thinly documented, so these are findings from reading real stem files.
