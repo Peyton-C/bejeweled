@@ -108,8 +108,15 @@ def test_tags_are_read_across_containers():
     }
     assert sep.read_tags(info) == {
         "title": "Déjà Vu", "artist": "Beyoncé", "album": None,
-        "year": "2006", "bpm": 105.0, "key": "Bbm",
+        "year": "2006", "bpm": 105.0, "key": "Bbm", "layout": None,
     }
+
+
+def test_a_layout_is_read_from_the_comment():
+    """OutOfTheWoods records Music's layout there, since no channel mask can."""
+    info = {"format": {"tags": {"comment": "Apple Music Dolby Atmos | layout=7.1.4 | OutOfTheWoods"}}}
+    assert sep.read_tags(info)["layout"] == "7.1.4"
+    assert sep.read_tags({"format": {"tags": {"comment": "ripped by me"}}})["layout"] is None
 
 
 def test_missing_or_bad_tags_are_left_out():
@@ -232,6 +239,24 @@ def test_a_51_file_is_read_by_its_declared_layout(ffmpeg, fake_demucs, tmp_path)
     stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs)
     assert stem_set.extra == {"layout": "5.1", "groups": ["bed", "surround"]}
     assert _residual_db(ffmpeg, [s.path for s in stem_set.stems], stem_set.master) < -120
+
+
+def test_a_wavpack_render_goes_by_its_tag_and_count(ffmpeg, fake_demucs, tmp_path):
+    """FFmpeg reports its own 9.1.6 for an undeclared 16 channel WavPack file."""
+    demucs, _ = fake_demucs
+    wav = _render(ffmpeg, tmp_path / "r16.wav", 16)
+    wv = str(tmp_path / "r16.wv")
+    ff.run([ffmpeg, "-v", "error", "-y", "-i", wav, "-c:a", "wavpack", wv])
+    stem_set = sep.separate(wv, str(tmp_path / "a"), ffmpeg=ffmpeg, demucs=demucs)
+    assert stem_set.extra["layout"] == "9.1.6"
+
+    # Ten channels is ambiguous by count, so only the tag can settle it
+    wav = _render(ffmpeg, tmp_path / "r10.wav", 10)
+    wv = str(tmp_path / "r10.wv")
+    ff.run([ffmpeg, "-v", "error", "-y", "-i", wav, "-c:a", "wavpack",
+            "-metadata", "comment=Apple Music Dolby Atmos | layout=7.1.2 | OutOfTheWoods", wv])
+    stem_set = sep.separate(wv, str(tmp_path / "b"), ffmpeg=ffmpeg, demucs=demucs)
+    assert stem_set.extra["layout"] == "7.1.2"
 
 
 def test_stereo_is_its_own_mixdown(ffmpeg, fake_demucs, tmp_path):

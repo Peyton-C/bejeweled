@@ -53,7 +53,7 @@ This works because a mixer who puts pads, synths and backing vocals in the surro
 
 The groups always sum to exactly the stereo fold, so the mixdown in the stem file is the same whichever way it was separated. The fold keeps L and R as they are, sends C and LFE to both sides at -3 dB, and every other channel to its own side at -3 dB.
 
-A file that declares its channel layout, as most 5.1 album rips do, is read by it. An Atmos render captured through a loopback device declares nothing, so bejeweled goes by the channel count instead. Pass `--layout` when that guess is wrong.
+A file that declares its channel layout, as most 5.1 album rips do, is read by it. An Atmos render captured through a loopback device declares nothing, so bejeweled goes by the channel count instead. Pass `--layout` when that guess is wrong. A `layout=9.1.6` entry in the file's comment, which OutOfTheWoods writes, is used ahead of both.
 
 | Channels | Read as | Channel order |
 | --- | --- | --- |

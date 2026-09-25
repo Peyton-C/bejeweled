@@ -9,7 +9,7 @@ import os
 
 from ..stems import Stem, StemSet
 
-AUDIO_EXTENSIONS = (".wav", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".opus", ".ogg")
+AUDIO_EXTENSIONS = (".wav", ".wv", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".opus", ".ogg")
 
 # The user supplied this audio and knows what it is, so nothing is marked unless they
 # ask for it. They may still want the origin recorded, so a marker is available.

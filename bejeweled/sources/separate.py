@@ -183,7 +183,27 @@ def read_tags(info: dict) -> dict:
         "year": match.group(0) if match else None,
         "bpm": bpm or None,
         "key": first("initialkey", "tkey", "key"),
+        "layout": _tagged_layout(first("comment")),
     }
+
+
+def _tagged_layout(comment: str | None) -> str | None:
+    """A `layout=` entry in the comment, which OutOfTheWoods writes because neither a
+    WAV channel mask nor FFmpeg's layout names can describe Music's channel order."""
+    match = re.search(r"\blayout=(\S+)", comment or "")
+    return match.group(1) if match else None
+
+
+def file_layout(info: dict, layout: str | None = None) -> str:
+    """The layout to read a probed file as: the one asked for, a `layout=` tag, the
+    one the file declares, or the default for its channel count."""
+    stream = _audio_stream(info)
+    # FFmpeg's WavPack decoder makes up its default layout when the file declares
+    # none, reporting an undeclared 16 channel file as its own 9.1.6, whose order is
+    # not Music's, so for WavPack only the channel count is trusted
+    declared = None if stream.get("codec_name") == "wavpack" else stream.get("channel_layout")
+    return resolve_layout(int(stream.get("channels") or 0),
+                          layout or read_tags(info)["layout"], declared)
 
 
 def _audio_stream(info: dict) -> dict:
@@ -223,8 +243,8 @@ def separate(path: str, work_dir: str, layout: str | None = None,
 
     info = ff.probe(ffmpeg, path)
     stream = _audio_stream(info)
-    layout = resolve_layout(int(stream.get("channels") or 0), layout,
-                            stream.get("channel_layout"))
+    tags = read_tags(info)
+    layout = file_layout(info, layout)
     plan = groups(layout)
 
     os.makedirs(work_dir, exist_ok=True)
@@ -271,7 +291,6 @@ def separate(path: str, work_dir: str, layout: str | None = None,
         raise
     shutil.rmtree(scratch, ignore_errors=True)
 
-    tags = read_tags(info)
     source = f"demucs {model}"
     if len(LAYOUTS[layout]) > 2:
         source += f", {layout} render in {len(plan)} groups"
