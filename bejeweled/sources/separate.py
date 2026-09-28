@@ -1,4 +1,4 @@
-"""Any mixed song as a stem source, separated by demucs.
+"""Any mixed song as a stem source, separated by a RoFormer, demucs, or both.
 
 Stereo is separated as it is. A multichannel render (5.1, 7.1.4, a 9.1.6 Atmos render)
 is folded to stereo in groups by where the mixer placed things, each group is
@@ -22,20 +22,33 @@ import shutil
 
 from .. import demucs as dm
 from .. import ffmpeg as ff
+from .. import roformer as rf
 from ..stems import Stem, StemSet
+
+# roformer runs BS-Roformer-SW alone. hybrid takes the vocals with a RoFormer vocal
+# model and splits what is left with demucs: +0.52 dB over htdemucs on average against
+# roformer's +0.80, but it was the only one to improve every one of ten tracks.
+SEPARATORS = ("roformer", "hybrid", "demucs")
+DEFAULT_SEPARATOR = "roformer"
+
+# The demucs model each separator uses unless told otherwise. The hybrid was measured
+# with htdemucs_ft, whose four times the cost is small beside the RoFormer's.
+DEFAULT_MODELS = {"demucs": dm.DEFAULT_MODEL, "hybrid": "htdemucs_ft"}
 
 # The input is the user's own audio, but the stems are bejeweled's, and a separation
 # should never pass for real stems of the same song, so titles are marked by default.
-# A set cut from a render is marked apart from one cut from the stereo master. The
-# markers name the input, never the output, which is stereo either way: (ATMOS) alone
-# would suggest the stems are still Atmos, and (AI) would suggest generated audio.
+# Two separators' stems of one song differ as much as two platforms' mixes do, so each
+# has its own letters, and a set cut from a render is marked apart from one cut from
+# the stereo master. The markers name the input, never the output, which is stereo
+# either way: (ATMOS) alone would suggest the stems are still Atmos, and (AI) would
+# suggest generated audio.
 SOURCE_NAME = "separate"
-TITLE_MARKER = "(DE)"
+SEPARATOR_CODES = {"roformer": "RF", "hybrid": "HY", "demucs": "DE"}
+TITLE_MARKER = f"({SEPARATOR_CODES[DEFAULT_SEPARATOR]})"
 MARK_TITLES_BY_DEFAULT = True
-SURROUND_MARKER = "(DE SR)"
-ATMOS_MARKER = "(DE AT)"
 
-# htdemucs_6s splits two more instruments out of Other; NI has no slot for either
+# BS-Roformer-SW and htdemucs_6s split two more instruments out of Other; NI has no
+# slot for either
 NI_MERGE = {"Guitar": "Other", "Piano": "Other"}
 
 # Channel roles in the order each layout carries them. Files ripped through a
@@ -146,15 +159,16 @@ def pan_filter(layout: str, channels: list[int]) -> str:
     return f"pan=stereo|c0={left}|c1={right}"
 
 
-def title_marker(layout: str) -> str:
-    """The marker for a set cut from this layout: whether it came from a stereo
-    master, a surround mix, or a render with height channels."""
+def title_marker(layout: str, separator: str = DEFAULT_SEPARATOR) -> str:
+    """The marker for a set cut by this separator from this layout: whether it came
+    from a stereo master, a surround mix, or a render with height channels."""
+    code = SEPARATOR_CODES[separator]
     roles = LAYOUTS[layout]
     if len(roles) <= 2:
-        return TITLE_MARKER
+        return f"({code})"
     if any(_GROUP_OF[role] == "height" for role in roles):
-        return ATMOS_MARKER
-    return SURROUND_MARKER
+        return f"({code} AT)"
+    return f"({code} SR)"
 
 
 # ------------------------------------------------------------------------- metadata
@@ -228,18 +242,29 @@ def _extract_cover(ffmpeg: str, path: str, info: dict, out_dir: str) -> str | No
 # ------------------------------------------------------------------------ separate
 
 def separate(path: str, work_dir: str, layout: str | None = None,
-             model: str = dm.DEFAULT_MODEL, device: str | None = None,
-             progress=None, ffmpeg: str | None = None, demucs: str | None = None) -> StemSet:
+             separator: str = DEFAULT_SEPARATOR, model: str | None = None,
+             device: str | None = None, progress=None, ffmpeg: str | None = None,
+             demucs: str | None = None, audio_separator: str | None = None) -> StemSet:
     """Separate one mixed file into a StemSet, with the stems written to `work_dir`.
+
+    `model` is the demucs model, used by demucs and by the second half of the hybrid,
+    and `device` is passed to demucs only; audio-separator picks its own.
 
     Scratch audio goes in a hidden folder under `work_dir` rather than the system
     temp directory, since a 16 channel render runs to a few gigabytes of it.
     """
+    if separator not in SEPARATORS:
+        raise ValueError(f"unknown separator {separator!r}, expected one of {', '.join(SEPARATORS)}")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"no such file: {path}")
     path = os.path.abspath(path)
     ffmpeg = ff.find_ffmpeg(ffmpeg)
-    demucs = dm.find_demucs(demucs)
+    # Both found before any audio is folded, so a missing tool fails at once
+    if separator != "roformer":
+        demucs = dm.find_demucs(demucs)
+        model = model or DEFAULT_MODELS[separator]
+    if separator != "demucs":
+        audio_separator = rf.find_audio_separator(audio_separator)
 
     info = ff.probe(ffmpeg, path)
     stream = _audio_stream(info)
@@ -262,12 +287,13 @@ def separate(path: str, work_dir: str, layout: str | None = None,
                     "-c:a", "pcm_f32le", out])
             submixes[name] = out
 
-        separated = dm.separate(demucs, list(submixes.values()),
-                                os.path.join(scratch, "sep"), model, device, progress)
+        separated = _run_separator(separator, list(submixes.values()),
+                                   os.path.join(scratch, "sep"), model, device, progress,
+                                   ffmpeg, demucs, audio_separator)
 
         stems = []
         for stem_name in separated[submixes[next(iter(plan))]]:
-            parts = [separated[sub][stem_name] for sub in submixes.values()]
+            parts = [part for sub in submixes.values() for part in separated[sub][stem_name]]
             name = stem_name.capitalize()
             out = os.path.join(work_dir, f"{name}.wav")
             if len(parts) == 1:
@@ -291,7 +317,12 @@ def separate(path: str, work_dir: str, layout: str | None = None,
         raise
     shutil.rmtree(scratch, ignore_errors=True)
 
-    source = f"demucs {model}"
+    if separator == "roformer":
+        source = _model_name(rf.STEMS_MODEL)
+    elif separator == "hybrid":
+        source = f"{_model_name(rf.VOCALS_MODEL)} vocals, demucs {model}"
+    else:
+        source = f"demucs {model}"
     if len(LAYOUTS[layout]) > 2:
         source += f", {layout} render in {len(plan)} groups"
     return StemSet(
@@ -305,5 +336,41 @@ def separate(path: str, work_dir: str, layout: str | None = None,
         stems=stems,
         master=master,
         source=source,
-        extra={"layout": layout, "groups": list(plan)},
+        extra={"layout": layout, "groups": list(plan), "separator": separator},
     )
+
+
+def _run_separator(separator, inputs, out_dir, model, device, progress,
+                   ffmpeg, demucs, audio_separator) -> dict[str, dict[str, list[str]]]:
+    """{input: {stem name: [paths that sum to that stem]}} from one separator."""
+    if separator == "roformer":
+        found = rf.separate(audio_separator, inputs, out_dir, rf.STEMS_MODEL, ffmpeg, progress)
+        return {p: {k: [v] for k, v in stems.items()} for p, stems in found.items()}
+    if separator == "demucs":
+        found = dm.separate(demucs, inputs, out_dir, model, device, progress)
+        return {p: {k: [v] for k, v in stems.items()} for p, stems in found.items()}
+
+    # The hybrid is two passes over every group, each reported as half the job
+    def half(offset):
+        if not progress:
+            return None
+        return lambda done, total, *stage: (
+            progress(done, total, *stage) if stage else progress(offset * total + done, 2 * total))
+
+    voc = rf.separate(audio_separator, inputs, os.path.join(out_dir, "vocals"),
+                      rf.VOCALS_MODEL, ffmpeg, half(0))
+    rest_of = {p: next(v for k, v in stems.items() if k != "vocals") for p, stems in voc.items()}
+    rest = dm.separate(demucs, list(rest_of.values()), os.path.join(out_dir, "rest"),
+                       model, device, half(1))
+    found = {}
+    for p in inputs:
+        stems = {k: [v] for k, v in rest[rest_of[p]].items()}
+        # Whatever demucs still hears as voice in the instrumental is vocal content
+        # the RoFormer missed, so it goes back with the vocals rather than being lost
+        stems["vocals"].insert(0, voc[p]["vocals"])
+        found[p] = stems
+    return found
+
+
+def _model_name(filename: str) -> str:
+    return os.path.splitext(filename)[0]

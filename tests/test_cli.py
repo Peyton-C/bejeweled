@@ -66,6 +66,14 @@ def test_separate_takes_a_file_and_the_shared_output_options(parser):
         parser.parse_args(["separate", "song.flac", "--layout", "hexagonal"])
 
 
+def test_separate_takes_a_separator_and_leaves_the_default_to_the_config(parser):
+    assert parser.parse_args(["separate", "a.wav", "--separator", "hybrid"]).separator == "hybrid"
+    # Unset on the command line, so a configured separator is not overridden
+    assert parser.parse_args(["separate", "a.wav"]).separator is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["separate", "a.wav", "--separator", "spleeter"])
+
+
 def test_stem_file_verbs_stay_top_level(parser):
     """These act on stem files whatever produced them, so they are not source-scoped."""
     assert parser.parse_args(["info", "a.stem.mp4"]).files == ["a.stem.mp4"]

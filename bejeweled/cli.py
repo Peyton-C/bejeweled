@@ -8,7 +8,7 @@ import sys
 from . import __version__, config, palette as pal
 from .demucs import DemucsError
 from .ffmpeg import FFmpegError
-from .sources.separate import LAYOUTS
+from .sources.separate import DEFAULT_SEPARATOR, LAYOUTS, SEPARATORS
 from .stems import NI_SLOTS
 from .writers import ni_stem
 
@@ -53,17 +53,20 @@ def build_parser() -> argparse.ArgumentParser:
     f_rip.add_argument("--keep-countin", action="store_true",
                        help="keep Festival's metronome count-in")
 
-    p_sep = sub.add_parser("separate", help="split a mixed song into stems with demucs")
+    p_sep = sub.add_parser("separate", help="split a mixed song into stems")
     p_sep.add_argument("files", nargs="+",
                        help="songs or multichannel renders, or folders of them")
     _add_output_options(p_sep)
     p_sep.add_argument("--layout", choices=list(LAYOUTS),
                        help="channel layout of a multichannel file (default: by channel count)")
-    p_sep.add_argument("--model", help="demucs model (default: htdemucs)")
+    p_sep.add_argument("--separator", choices=list(SEPARATORS),
+                       help=f"what separates (default: {DEFAULT_SEPARATOR})")
+    p_sep.add_argument("--model", help="demucs model, for demucs and the hybrid "
+                                       "(default: htdemucs, htdemucs_ft for the hybrid)")
     p_sep.add_argument("--device",
-                       help="cpu, cuda or mps, ROCm counts as cuda (default: mps on Apple "
-                            "Silicon, otherwise whatever demucs picks)")
-    p_sep.add_argument("--suffix", help="appended to the title instead of '(DE)'")
+                       help="demucs's device: cpu, cuda or mps, ROCm counts as cuda (default: "
+                            "mps on Apple Silicon, otherwise whatever demucs picks)")
+    p_sep.add_argument("--suffix", help="appended to the title instead of a marker such as '(RF)'")
     p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
     # --- verbs that act on stem files, whatever produced them ---
@@ -247,17 +250,22 @@ def _separate_one(path, args, cfg) -> int:
     base = os.path.splitext(os.path.basename(path))[0]
     work = os.path.join(out_dir, f"{_safe(base)} - stems")
 
-    last = [-1]
+    last = [None]
 
-    def progress(done, total):
+    def progress(done, total, stage="separating"):
+        if not total:
+            return
         percent = done * 100 // total
-        if percent != last[0]:
-            last[0] = percent
-            print(f"\r  separating {percent}%", end="", flush=True)
+        if (stage, percent) != last[0]:
+            if last[0] and last[0][0] != stage:
+                print()
+            last[0] = (stage, percent)
+            print(f"\r  {stage} {percent}%", end="", flush=True)
 
+    separator = args.separator or sep_cfg.get("separator", separate.DEFAULT_SEPARATOR)
     stem_set = separate.separate(
-        path, work, layout=args.layout,
-        model=args.model or sep_cfg.get("model", dm.DEFAULT_MODEL),
+        path, work, layout=args.layout, separator=separator,
+        model=args.model or sep_cfg.get("model"),
         device=args.device or sep_cfg.get("device") or dm.default_device(),
         progress=progress,
     )
@@ -268,7 +276,7 @@ def _separate_one(path, args, cfg) -> int:
     if len(groups) > 1:
         print(f"  read as {layout}, separated in {len(groups)} groups: {', '.join(groups)}")
 
-    marker = separate.title_marker(layout)
+    marker = separate.title_marker(layout, separator)
     suffix = None if args.no_suffix else (args.suffix or config.title_suffix(
         separate.SOURCE_NAME, marker, separate.MARK_TITLES_BY_DEFAULT, cfg))
     if suffix:
@@ -295,7 +303,10 @@ def _separate_one(path, args, cfg) -> int:
     for path in written:
         if path and os.path.exists(path):
             os.remove(path)
-    os.rmdir(work)
+    # An earlier --format files run into the same folder may have left stems this one
+    # did not write, such as a RoFormer's Guitar and Piano, which are not ours to delete
+    if not os.listdir(work):
+        os.rmdir(work)
     print(f"wrote {out_path}")
     return 0
 

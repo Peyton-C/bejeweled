@@ -105,12 +105,13 @@ def environment() -> dict[str, str]:
 _PERCENT = re.compile(r"(\d+)%\|")
 
 
-def run(cmd: list[str], progress=None, tracks: int = 1, env: dict | None = None) -> None:
-    """Run demucs, reporting its progress bars and surfacing its output on failure.
+def run(cmd: list[str], progress=None, tracks: int = 1, env: dict | None = None,
+        name: str = "demucs", error: type[RuntimeError] = DemucsError) -> None:
+    """Run a separator, reporting its progress bars and surfacing its output on failure.
 
     `progress(done, total)` is called with whole-job percentages. demucs draws one bar
     per input and carriage-returns within it, so completed bars are counted to place
-    the current one within the whole job.
+    the current one within the whole job. audio-separator draws its bars the same way.
     """
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     tail, buf, finished, last = [], b"", 0, 0
@@ -138,14 +139,14 @@ def run(cmd: list[str], progress=None, tracks: int = 1, env: dict | None = None)
             break
     code = proc.wait()
     if code < 0:
-        # A process the OS kills prints nothing, so the tail would only be demucs's
-        # ordinary chatter and read as an error with no description
+        # A process the OS kills prints nothing, so the tail would only be the
+        # separator's ordinary chatter and read as an error with no description
         try:
-            name = signal.Signals(-code).name
+            sig = signal.Signals(-code).name
         except ValueError:
-            name = f"signal {-code}"
+            sig = f"signal {-code}"
         hint = (", which usually means the system ran out of memory. Run one "
                 "separation at a time" if -code == signal.SIGKILL else "")
-        raise DemucsError(f"demucs was stopped by {name}{hint}")
+        raise error(f"{name} was stopped by {sig}{hint}")
     if code != 0:
-        raise DemucsError("\n".join(tail + [f"demucs exited with status {code}"]))
+        raise error("\n".join(tail + [f"{name} exited with status {code}"]))

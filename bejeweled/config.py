@@ -52,16 +52,23 @@ backgrounds = ["#1E1E1E"]
 write_comment = true
 
 [separate]
-# The demucs model. htdemucs_ft is slightly cleaner and four times slower.
-model = "htdemucs"
+# roformer is the cleanest. hybrid is a little less clean but never lost to demucs
+# on a track. demucs is several times faster than either, and needs no
+# audio-separator.
+separator = "roformer"
 
-# cpu, cuda or mps. Left unset, Apple Silicon uses mps and anything else lets
-# demucs choose.
+# The demucs model, for demucs and the second half of the hybrid. Left unset,
+# demucs uses htdemucs and the hybrid htdemucs_ft.
+# model = "htdemucs"
+
+# demucs's device: cpu, cuda or mps. Left unset, Apple Silicon uses mps and
+# anything else lets demucs choose. audio-separator picks its own.
 # device = "mps"
 
-# Mark separated titles so they are not mistaken for real stems: (DE) from a
-# stereo file, (DE SR) from a surround mix, (DE AT) from an Atmos render. Setting
-# title_suffix here replaces all three.
+# Mark separated titles so they are not mistaken for real stems. Each separator has
+# its own letters, RF for roformer, HY for hybrid and DE for demucs, followed by SR
+# for a surround mix or AT for an Atmos render: (RF), (RF SR), (RF AT). Setting
+# title_suffix here replaces them all.
 mark_titles = true
 
 [festival]

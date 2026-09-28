@@ -19,12 +19,12 @@ uv run bejeweled --help
 
 FFmpeg is taken from your `PATH`. Set `BEJEWELED_FFMPEG` to override it.
 
-`bejeweled separate` also needs demucs, which is not installed with bejeweled, see [Separation](docs/separate.md).
+`bejeweled separate` also needs audio-separator, or demucs, neither of which is installed with bejeweled, see [Separation](docs/separate.md).
 
 ## Use
 
 ```sh
-bejeweled separate "Song.flac"                      # split any song with demucs
+bejeweled separate "Song.flac"                      # split any song into stems
 bejeweled separate "Song (Atmos).wav"               # a surround or Atmos render
 
 bejeweled convert ./my-stems/        # build a stem file from a folder of stems
@@ -45,7 +45,7 @@ Each source is its own subcommand, so `bejeweled festival --help` lists what Fes
 
 | Doc | Covers |
 | --- | --- |
-| [Separation](docs/separate.md) | Splitting any song with demucs, including 5.1 and Dolby Atmos renders |
+| [Separation](docs/separate.md) | Splitting any song with RoFormer or demucs, including 5.1 and Dolby Atmos renders |
 | [Fortnite Festival](docs/festival.md) | Ripping tracks, the metadata Festival provides, and the count-in it puts on every song |
 | [Native Instruments stems](docs/ni.md) | What a `.stem.mp4` contains, which codecs work where, and what bejeweled writes inside it |
 

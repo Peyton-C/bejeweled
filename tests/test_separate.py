@@ -10,6 +10,7 @@ import pytest
 
 from bejeweled import demucs as dm
 from bejeweled import ffmpeg as ff
+from bejeweled import roformer as rf
 from bejeweled.sources import separate as sep
 
 
@@ -90,7 +91,15 @@ def test_a_one_sided_group_still_folds_to_stereo():
     ("5.1.4", "(DE AT)"), ("9.1.6", "(DE AT)"),
 ])
 def test_marker_follows_the_layout(layout, marker):
-    assert sep.title_marker(layout) == marker
+    assert sep.title_marker(layout, "demucs") == marker
+
+
+def test_each_separator_has_its_own_marker():
+    """Two separators' stems of one song must not pass for each other."""
+    assert sep.title_marker("9.1.6") == "(RF AT)"
+    assert sep.title_marker("stereo", "hybrid") == "(HY)"
+    assert sep.TITLE_MARKER == "(RF)"
+    assert len(set(sep.SEPARATOR_CODES.values())) == len(sep.SEPARATORS)
 
 
 def test_separations_are_marked_by_default():
@@ -161,6 +170,50 @@ def fake_demucs(tmp_path, ffmpeg):
     return str(script), log
 
 
+@pytest.fixture
+def fake_audio_separator(tmp_path, ffmpeg, monkeypatch):
+    """Stands in for audio-separator: BS-Roformer-SW's six stems at a sixth of the
+    input each, or the vocal model's two at half, named as audio-separator names them,
+    so the stems of every group sum to exactly what it was given. Each input's peak is
+    logged in dB, to check the headroom it is handed."""
+    log = tmp_path / "as-argv.txt"
+    monkeypatch.setenv("BEJEWELED_MODEL_DIR", str(tmp_path / "models"))
+    script = tmp_path / "audio-separator"
+    script.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import os, re, subprocess, sys
+        args = sys.argv[1:]
+        model = args[args.index("-m") + 1]
+        models = args[args.index("--model_file_dir") + 1]
+        if "--download_model_only" in args:
+            open(os.path.join(models, model), "w").close()
+            sys.exit(0)
+        assert os.path.exists(os.path.join(models, model)), "model not downloaded"
+        open({str(log)!r}, "a").write(" ".join(args) + "\\n")
+        out = args[args.index("--output_dir") + 1]
+        os.makedirs(out, exist_ok=True)
+        if model.startswith("BS-Roformer"):
+            stems, level = ("bass", "drums", "other", "vocals", "guitar", "piano"), 1 / 6
+        else:
+            stems, level = ("Vocals", "Instrumental"), 0.5
+        for path in [a for a in args if a.endswith(".wav")]:
+            stats = subprocess.run([{ffmpeg!r}, "-v", "info", "-nostats", "-i", path, "-af",
+                                    "astats=measure_perchannel=none", "-f", "null", "-"],
+                                   capture_output=True, text=True).stderr
+            peak = re.findall(r"Peak level dB: (-?[\\d.]+)", stats)[-1]
+            open({str(log)!r}, "a").write(f"peak {{peak}}\\n")
+            base = os.path.splitext(os.path.basename(path))[0]
+            for stem in stems:
+                print(f"  50%|###", file=sys.stderr)
+                subprocess.run([{ffmpeg!r}, "-v", "error", "-y", "-i", path, "-af",
+                                f"volume={{level!r}}", "-c:a", "pcm_f32le",
+                                os.path.join(out, f"{{base}}_({{stem}})_{{model[:-5]}}.wav")],
+                               check=True)
+    """))
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script), log
+
+
 def _render(ffmpeg, path, channels, layout=None):
     """Independent noise on every channel, so any misrouting shows up."""
     inputs = []
@@ -215,10 +268,12 @@ def test_groups_sum_back_to_the_plain_fold(ffmpeg, tmp_path):
 def test_separating_a_render_sums_each_stem_across_groups(ffmpeg, fake_demucs, tmp_path):
     demucs, log = fake_demucs
     render = _render(ffmpeg, tmp_path / "Song.wav", 16)
-    stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs)
+    stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs,
+                            separator="demucs")
 
     assert stem_set.names() == ["Bass", "Drums", "Other", "Vocals"]
-    assert stem_set.extra == {"layout": "9.1.6", "groups": list(sep.GROUPS)}
+    assert stem_set.extra == {"layout": "9.1.6", "groups": list(sep.GROUPS),
+                              "separator": "demucs"}
     assert stem_set.title == "Song"
     assert "9.1.6 render in 4 groups" in stem_set.source
     # Nothing is lost or invented in the summing
@@ -236,8 +291,10 @@ def test_separating_a_render_sums_each_stem_across_groups(ffmpeg, fake_demucs, t
 def test_a_51_file_is_read_by_its_declared_layout(ffmpeg, fake_demucs, tmp_path):
     demucs, _ = fake_demucs
     render = _render(ffmpeg, tmp_path / "surround.wav", 6, "5.1(side)")
-    stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs)
-    assert stem_set.extra == {"layout": "5.1", "groups": ["bed", "surround"]}
+    stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs,
+                            separator="demucs")
+    assert stem_set.extra["layout"] == "5.1"
+    assert stem_set.extra["groups"] == ["bed", "surround"]
     assert _residual_db(ffmpeg, [s.path for s in stem_set.stems], stem_set.master) < -120
 
 
@@ -247,7 +304,8 @@ def test_a_wavpack_render_goes_by_its_tag_and_count(ffmpeg, fake_demucs, tmp_pat
     wav = _render(ffmpeg, tmp_path / "r16.wav", 16)
     wv = str(tmp_path / "r16.wv")
     ff.run([ffmpeg, "-v", "error", "-y", "-i", wav, "-c:a", "wavpack", wv])
-    stem_set = sep.separate(wv, str(tmp_path / "a"), ffmpeg=ffmpeg, demucs=demucs)
+    stem_set = sep.separate(wv, str(tmp_path / "a"), ffmpeg=ffmpeg, demucs=demucs,
+                            separator="demucs")
     assert stem_set.extra["layout"] == "9.1.6"
 
     # Ten channels is ambiguous by count, so only the tag can settle it
@@ -255,17 +313,64 @@ def test_a_wavpack_render_goes_by_its_tag_and_count(ffmpeg, fake_demucs, tmp_pat
     wv = str(tmp_path / "r10.wv")
     ff.run([ffmpeg, "-v", "error", "-y", "-i", wav, "-c:a", "wavpack",
             "-metadata", "comment=Apple Music Dolby Atmos | layout=7.1.2 | OutOfTheWoods", wv])
-    stem_set = sep.separate(wv, str(tmp_path / "b"), ffmpeg=ffmpeg, demucs=demucs)
+    stem_set = sep.separate(wv, str(tmp_path / "b"), ffmpeg=ffmpeg, demucs=demucs,
+                            separator="demucs")
     assert stem_set.extra["layout"] == "7.1.2"
 
 
 def test_stereo_is_its_own_mixdown(ffmpeg, fake_demucs, tmp_path):
     demucs, _ = fake_demucs
     song = _render(ffmpeg, tmp_path / "song.wav", 2, "stereo")
-    stem_set = sep.separate(song, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs)
+    stem_set = sep.separate(song, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=demucs,
+                            separator="demucs")
     assert stem_set.master == song
     assert stem_set.extra["groups"] == ["bed"]
     assert "render" not in stem_set.source
+
+
+def test_roformer_sums_six_stems_across_groups(ffmpeg, fake_audio_separator, tmp_path):
+    exe, log = fake_audio_separator
+    render = _render(ffmpeg, tmp_path / "Song.wav", 16)
+    stem_set = sep.separate(render, str(tmp_path / "work"), ffmpeg=ffmpeg, audio_separator=exe)
+
+    # Guitar and piano are kept, and only folded into Other when a stem file is written
+    assert stem_set.names() == ["Bass", "Drums", "Guitar", "Other", "Piano", "Vocals"]
+    assert stem_set.extra["separator"] == "roformer"
+    assert stem_set.source.startswith("BS-Roformer-SW")
+    assert _residual_db(ffmpeg, [s.path for s in stem_set.stems], stem_set.master) < -120
+    assert sorted(os.listdir(tmp_path / "work")) == [
+        "Bass.wav", "Drums.wav", "Guitar.wav", "Master.wav", "Other.wav", "Piano.wav", "Vocals.wav"]
+
+    lines = log.read_text().splitlines()
+    argv = [line for line in lines if not line.startswith("peak")]
+    assert len(argv) == 1, "all groups go to one invocation"
+    for flag in ("--use_soundfile", "--normalization 1.0", "--use_autocast"):
+        assert flag in argv[0]
+    # Every group reaches it at a -6 dBFS peak, under its normalisation threshold
+    peaks = [float(line.split()[1]) for line in lines if line.startswith("peak")]
+    assert len(peaks) == 4 and all(abs(p + 6.02) < 0.01 for p in peaks)
+
+
+def test_hybrid_puts_what_demucs_hears_as_voice_back_with_the_vocals(
+        ffmpeg, fake_audio_separator, fake_demucs, tmp_path):
+    exe, _ = fake_audio_separator
+    demucs, log = fake_demucs
+    render = _render(ffmpeg, tmp_path / "Song.wav", 6, "5.1(side)")
+    stem_set = sep.separate(render, str(tmp_path / "work"), separator="hybrid",
+                            ffmpeg=ffmpeg, demucs=demucs, audio_separator=exe)
+
+    assert stem_set.names() == ["Bass", "Drums", "Other", "Vocals"]
+    assert "-n htdemucs_ft" in log.read_text(), "the hybrid defaults to htdemucs_ft"
+    assert _residual_db(ffmpeg, [s.path for s in stem_set.stems], stem_set.master) < -120
+
+
+def test_missing_audio_separator_says_how_to_install_it(ffmpeg, monkeypatch, tmp_path):
+    monkeypatch.delenv("BEJEWELED_AUDIO_SEPARATOR", raising=False)
+    monkeypatch.setattr(rf.shutil, "which", lambda name: None)
+    song = _render(ffmpeg, tmp_path / "song.wav", 2)
+    with pytest.raises(rf.AudioSeparatorError, match="(?s)uv tool install.*--separator demucs"):
+        sep.separate(song, str(tmp_path / "work"), ffmpeg=ffmpeg)
+    assert not (tmp_path / "work").exists()
 
 
 def test_a_missing_file_says_it_is_missing(tmp_path):
@@ -282,7 +387,8 @@ def test_a_failed_separation_leaves_nothing_behind(ffmpeg, tmp_path):
     broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
     song = _render(ffmpeg, tmp_path / "song.wav", 2)
     with pytest.raises(dm.DemucsError):
-        sep.separate(song, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=str(broken))
+        sep.separate(song, str(tmp_path / "work"), ffmpeg=ffmpeg, demucs=str(broken),
+                     separator="demucs")
     assert not (tmp_path / "work").exists()
 
 
