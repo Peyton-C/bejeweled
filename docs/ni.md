@@ -45,4 +45,4 @@ The format is thinly documented, so these are findings from reading real stem fi
 
 The stem names and colours live at `moov/udta/stem` as raw JSON, with no version or flags header ahead of it. `moov` sits after `mdat`, which means that JSON can be replaced without moving any audio or rewriting a single sample offset, and that is why `recolor` is instant.
 
-Key and BPM are not written by FFmpeg, which silently drops both when muxing MP4, so bejeweled writes them itself. BPM goes in the standard `tmpo` atom and the key in an iTunes freeform atom named `initialkey`, which is where TagLib looks, and therefore where Mixxx and Traktor find it.
+Key and BPM are not written by FFmpeg, which silently drops both when muxing MP4, so bejeweled writes them itself. BPM goes in the standard `tmpo` atom, which only holds whole numbers, and exactly in an iTunes freeform atom named `BPM`. The key goes in a freeform atom named `initialkey`. Freeform atoms are where TagLib looks, and therefore where Mixxx and Traktor find them.

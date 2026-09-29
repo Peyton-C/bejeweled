@@ -139,6 +139,16 @@ def test_itunes_tags_survive_where_ffmpeg_drops_them(tmp_path, stem_set):
     assert tags["BPM"] == "89"
 
 
+def test_a_fractional_bpm_is_written_exactly(tmp_path, stem_set):
+    out = str(tmp_path / "fraction.stem.mp4")
+    ni_stem.write(StemSet(title="T", bpm=143.297, key="C#m", stems=stem_set.stems), out)
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", out],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(probe.stdout)["format"]["tags"]["BPM"] == "143.297"
+
+
 def test_stem_atom_still_readable_after_itunes_tags(tmp_path, stem_set):
     """Both injections touch moov, so they must not corrupt each other."""
     out = str(tmp_path / "both.stem.mp4")
