@@ -5,7 +5,7 @@ import argparse
 import os
 import sys
 
-from . import __version__, config, palette as pal
+from . import __version__, config, jobs, palette as pal
 from .demucs import DemucsError
 from .ffmpeg import FFmpegError
 from .sources.separate import DEFAULT_SEPARATOR, LAYOUTS, SEPARATORS
@@ -94,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.add_argument("--init", action="store_true", help="write a starting config")
     p_cfg.add_argument("--force", action="store_true", help="overwrite an existing one")
 
+    p_mcp = sub.add_parser("mcp", help="run as an MCP server for an agent")
+    p_mcp.add_argument("-o", "--out", help="where stem files go (default: ~/Music/bejeweled)")
+
     return parser
 
 
@@ -104,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         handler = {
             "separate": _separate, "convert": _convert, "recolor": _recolor,
-            "palette": _palette, "info": _info, "config": _config,
+            "palette": _palette, "info": _info, "config": _config, "mcp": _mcp,
         }[args.command]
 
     try:
@@ -117,10 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _colors(args, cfg):
     """Command line palette wins over the configured one."""
-    spec = getattr(args, "palette", None)
-    if spec:
-        return [c.strip() for c in spec.split(",")] if "," in spec else spec
-    return config.palette_spec(cfg)
+    return jobs.colors(getattr(args, "palette", None), cfg)
 
 
 def _source_suffix(source, cfg):
@@ -138,9 +138,6 @@ def _rip(args) -> int:
     track = festival.find(args.query, tracks)
     print(f"{track['artist']} - {track['title']}")
 
-    out_dir = os.path.abspath(args.out)
-    work = os.path.join(out_dir, f"{_safe(track['title'])} - stems")
-
     last = [-1]
 
     def progress(done, total):
@@ -151,20 +148,14 @@ def _rip(args) -> int:
             last[0] = percent
             print(f"\r  downloading {percent}%", end="", flush=True)
 
-    meta_cfg = cfg.get("metadata", {})
-    suffix = None if args.no_suffix else (args.suffix or _source_suffix(festival, cfg))
-
-    keys = args.keys or cfg.get("festival", {}).get("keys")
-    stem_set = festival.rip(
-        track, work, keys_path=keys, progress=progress,
-        title_suffix=suffix,
-        cover=not args.no_cover and cfg.get("festival", {}).get("cover_art", True),
-        trim_countin=not args.keep_countin
-        and cfg.get("festival", {}).get("trim_countin", True),
+    written = jobs.rip_festival(
+        track, args.out, cfg, keys=args.keys, suffix=args.suffix, no_suffix=args.no_suffix,
+        cover=not args.no_cover, trim_countin=not args.keep_countin, fmt=args.format,
+        codec=args.codec, palette=args.palette, progress=progress,
     )
     print()
 
-    detected = stem_set.extra.get("countin")
+    detected = written.stem_set.extra.get("countin")
     if detected:
         notes = []
         if detected.kept_pickup:
@@ -177,29 +168,15 @@ def _rip(args) -> int:
     elif not args.keep_countin:
         print("  no count-in detected, nothing trimmed")
 
-    if meta_cfg.get("write_comment", True):
-        stem_set.comment = stem_set.describe_source(__version__)
-
-    fmt = args.format or cfg.get("output", {}).get("format", "ni-stem")
-    if fmt == "files":
-        print(f"wrote {len(stem_set.stems)} stems to {work}")
-        return 0
-
-    out_path = os.path.join(out_dir, f"{_safe(stem_set.title)}.stem.mp4")
-    ni_stem.write(
-        stem_set, out_path,
-        codec=args.codec or cfg.get("output", {}).get("codec", "aac"),
-        sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
-        merge=festival.NI_MERGE,
-        colors=_colors(args, cfg),
-    )
-    for stem in stem_set.stems:
-        os.remove(stem.path)
-    if stem_set.cover and os.path.exists(stem_set.cover):
-        os.remove(stem_set.cover)
-    os.rmdir(work)
-    print(f"wrote {out_path}")
+    _report(written)
     return 0
+
+
+def _report(written) -> None:
+    if os.path.isdir(written.path):
+        print(f"wrote {len(written.stem_set.stems)} stems to {written.path}")
+    else:
+        print(f"wrote {written.path}")
 
 
 def _separate(args) -> int:
@@ -242,14 +219,6 @@ def _separate(args) -> int:
 
 
 def _separate_one(path, args, cfg) -> int:
-    from . import demucs as dm
-    from .sources import separate
-
-    sep_cfg = cfg.get("separate", {})
-    out_dir = os.path.abspath(args.out)
-    base = os.path.splitext(os.path.basename(path))[0]
-    work = os.path.join(out_dir, f"{_safe(base)} - stems")
-
     last = [None]
 
     def progress(done, total, stage="separating"):
@@ -262,52 +231,19 @@ def _separate_one(path, args, cfg) -> int:
             last[0] = (stage, percent)
             print(f"\r  {stage} {percent}%", end="", flush=True)
 
-    separator = args.separator or sep_cfg.get("separator", separate.DEFAULT_SEPARATOR)
-    stem_set = separate.separate(
-        path, work, layout=args.layout, separator=separator,
-        model=args.model or sep_cfg.get("model"),
-        device=args.device or sep_cfg.get("device") or dm.default_device(),
-        progress=progress,
+    written = jobs.separate_file(
+        path, args.out, cfg, separator=args.separator, layout=args.layout,
+        model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
+        fmt=args.format, codec=args.codec, palette=args.palette, progress=progress,
     )
     print()
 
-    layout = stem_set.extra["layout"]
-    groups = stem_set.extra["groups"]
+    layout = written.stem_set.extra["layout"]
+    groups = written.stem_set.extra["groups"]
     if len(groups) > 1:
         print(f"  read as {layout}, separated in {len(groups)} groups: {', '.join(groups)}")
 
-    marker = separate.title_marker(layout, separator)
-    suffix = None if args.no_suffix else (args.suffix or config.title_suffix(
-        separate.SOURCE_NAME, marker, separate.MARK_TITLES_BY_DEFAULT, cfg))
-    if suffix:
-        stem_set.title = f"{stem_set.title} {suffix}"
-    if cfg.get("metadata", {}).get("write_comment", True):
-        stem_set.comment = stem_set.describe_source(__version__)
-
-    fmt = args.format or cfg.get("output", {}).get("format", "ni-stem")
-    if fmt == "files":
-        print(f"wrote {len(stem_set.stems)} stems to {work}")
-        return 0
-
-    out_path = os.path.join(out_dir, f"{_safe(stem_set.title)}.stem.mp4")
-    ni_stem.write(
-        stem_set, out_path,
-        codec=args.codec or cfg.get("output", {}).get("codec", "aac"),
-        sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
-        merge=separate.NI_MERGE,
-        colors=_colors(args, cfg),
-    )
-    written = [s.path for s in stem_set.stems] + [stem_set.cover]
-    if stem_set.master != os.path.abspath(path):
-        written.append(stem_set.master)
-    for path in written:
-        if path and os.path.exists(path):
-            os.remove(path)
-    # An earlier --format files run into the same folder may have left stems this one
-    # did not write, such as a RoFormer's Guitar and Piano, which are not ours to delete
-    if not os.listdir(work):
-        os.rmdir(work)
-    print(f"wrote {out_path}")
+    _report(written)
     return 0
 
 
@@ -335,7 +271,7 @@ def _convert(args) -> int:
 
     out_path = args.out or os.path.join(
         os.path.dirname(os.path.normpath(args.folder)) or ".",
-        f"{_safe(stem_set.title)}.stem.mp4",
+        f"{jobs.safe(stem_set.title)}.stem.mp4",
     )
     merge = {"Lead": "Other"} if stem_set.get("Lead") else None
     ni_stem.write(
@@ -422,9 +358,10 @@ def _config(args) -> int:
     return 0
 
 
-def _safe(name: str) -> str:
-    import re
-    return re.sub(r'[<>:"/\\|?*]', "", name).strip()
+def _mcp(args) -> int:
+    from . import mcp
+
+    return mcp.serve(args.out)
 
 
 if __name__ == "__main__":

@@ -117,6 +117,10 @@ with its own arguments, so each gets its own subcommand. Outputs do not multiply
 stems, or the raw stems with no container. That is the whole list, which is why a flag
 suffices. Do not add an output format without asking.
 
+`jobs.py` runs a source through to a written file. The command line and the MCP server
+both call it, so neither carries its own copy of the pipeline, and a setting resolves
+the same way from either.
+
 A set may hold more stems than an output format accepts, so folding happens at write
 time and the source stays faithful to what it actually received.
 
