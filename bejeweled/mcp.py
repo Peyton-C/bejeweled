@@ -43,8 +43,9 @@ TOOLS = [
         "name": "search_festival",
         "description": "Search Fortnite Festival's catalogue. Returns the total that match "
                        "and up to `limit` of them: id, title, artist, year, BPM, key (Ab is "
-                       "major, Abm minor) and length in seconds. A track already downloaded "
-                       "also has the `path` of its stem file.",
+                       "major, Abm minor) and length in seconds. Epic gives a genre for "
+                       "few tracks, so most have none, here and in the stem file. A track "
+                       "already downloaded also has the `path` of its stem file.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -263,7 +264,7 @@ class Server:
     def _describe(self, track: dict, cfg: dict) -> dict:
         entry = {"id": track["sid"], "title": track["title"], "artist": track["artist"],
                  "year": track.get("year"), "bpm": track.get("bpm"), "key": track.get("key"),
-                 "seconds": track.get("duration")}
+                 "genre": track.get("genre"), "seconds": track.get("duration")}
         path = jobs.festival_output(track, self.out_dir, cfg)
         if self._artist_of(path) == track["artist"]:
             entry["path"] = path
@@ -333,7 +334,7 @@ class Server:
                                          progress=self._progress(token, "separating"))
         stem_set = written.stem_set
         result = {"path": written.path, "title": stem_set.title, "artist": stem_set.artist,
-                  "bpm": stem_set.bpm, "key": stem_set.key,
+                  "bpm": stem_set.bpm, "key": stem_set.key, "genre": stem_set.genre,
                   "separator": stem_set.extra["separator"], "read_as": stem_set.extra["layout"]}
         return {k: v for k, v in result.items() if v is not None}
 

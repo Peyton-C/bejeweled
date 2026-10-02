@@ -113,3 +113,18 @@ def test_parse_mpd_rejects_a_manifest_with_no_audio():
     xml = ON_DEMAND_MPD.replace('mimeType="audio/mp4"', 'mimeType="video/mp4"')
     with pytest.raises(festival.FestivalError, match="no audio"):
         festival._parse_mpd(xml, "https://example.com/abc/main.mpd")
+
+
+@pytest.mark.parametrize("listed,expected", [
+    (["DanceElectronic"], "Dance"),
+    (["RnB"], "R&B/Soul"),
+    (["RapHipHop"], "Hip-Hop/Rap"),
+    (["Pop", "Rock"], "Pop"),      # the first listed
+    ("Country", "Country"),
+    (["Metal"], "Metal"),          # one Epic adds later is kept as it is
+    (None, None),
+    ([], None),
+    ([""], None),
+])
+def test_genre_is_written_under_apples_name(listed, expected):
+    assert festival._genre(listed) == expected

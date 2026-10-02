@@ -50,7 +50,7 @@ uv tool install demucs --with soundfile --index https://download.pytorch.org/whl
 bejeweled runs the RoFormer at reduced precision and compiles it on first use, which made it about five times faster on ROCm and about 1.7 times on Apple Silicon with no measurable loss. The first separation after installing is a few seconds slower while it compiles.
 
 ## Stems
-roformer gives six stems, and guitar and piano are folded into Other in a stem file. hybrid and demucs give four, which map one to one onto the stem format's slots. Title, artist, album, year, BPM, key and cover art are read from the file's own tags, and the title falls back to the file name.
+roformer gives six stems, and guitar and piano are folded into Other in a stem file. hybrid and demucs give four, which map one to one onto the stem format's slots. Title, artist, album, year, BPM, key, genre and cover art are read from the file's own tags, and the title falls back to the file name.
 
 | Option | Config | Default |
 | --- | --- | --- |

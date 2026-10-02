@@ -18,7 +18,7 @@ MCP has no way to send a file to a server, so bejeweled exchanges paths. The ser
 ## Tools
 | Tool | What |
 | --- | --- |
-| `search_festival` | Festival tracks whose title or artist has every word of `query`, narrowed by `bpm_min`, `bpm_max` and `key`, a page at a time. Each has an id, title, artist, year, BPM, key and length, and its `path` if it is already downloaded |
+| `search_festival` | Festival tracks whose title or artist has every word of `query`, narrowed by `bpm_min`, `bpm_max` and `key`, a page at a time. Each has an id, title, artist, year, BPM, key and length, its genre where Festival gives one, and its `path` if it is already downloaded |
 | `download_festival` | Downloads the track with an `id` from `search_festival` and writes a stem file. `count_in` says whether the count-in was removed or left in |
 | `separate_song` | Separates the audio file at `path` and writes a stem file. Takes `separator` and `layout`, which default as the command line's do |
 

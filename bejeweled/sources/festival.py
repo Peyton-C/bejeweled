@@ -49,6 +49,20 @@ LAYOUT_PAIRS = (("FL", "FR"), ("FC", "LFE"), ("BL", "BR"), ("SL", "SR"), ("TFL",
 # Festival splits melodic content two ways; NI has one slot for it
 NI_MERGE = {"Lead": "Other", "Other": "Other"}
 
+# Epic's genre names as Apple Music spells them, which is what a library sorts by and
+# what pink diamond matches a genre tag against. DanceElectronic could be either of
+# Apple's two, and is Dance because the tracks carrying it are Bad Romance, Starships and
+# Party Rock Anthem rather than anything Apple files under Electronic. A name not listed
+# here is written as Epic has it.
+GENRES = {
+    "Pop": "Pop",
+    "Rock": "Rock",
+    "DanceElectronic": "Dance",
+    "RnB": "R&B/Soul",
+    "RapHipHop": "Hip-Hop/Rap",
+    "Country": "Country",
+}
+
 # This source fetches the audio itself, and a Festival cut is often a different mix from
 # the commercial release, so its titles are marked unless the user says otherwise
 SOURCE_NAME = "festival"
@@ -88,6 +102,7 @@ def catalog(session: requests.Session | None = None) -> list[dict]:
             "duration": track.get("dn"),
             "cover_url": track.get("au", ""),
             "key": _format_key(track.get("mk"), track.get("mm")),
+            "genre": _genre(track.get("ge")),
             "added": track.get("nu"),
             "parts": _part_order(qi),
         })
@@ -103,6 +118,19 @@ def _format_key(root: str | None, mode: str | None) -> str | None:
     if not root:
         return None
     return f"{root}m" if (mode or "").lower().startswith("min") else root
+
+
+def _genre(listed) -> str | None:
+    """The first genre Epic lists for a track, under Apple's name for it.
+
+    Only `ge` is read. Epic fills it in on 53 of 731 tracks, and the `ag` field a few
+    more carry describes the artist, not the song: Counting Stars is Pop in `ge` and
+    Rock in `ag`, and Side To Side is RapHipHop there.
+    """
+    if isinstance(listed, str):
+        listed = [listed]
+    name = next((g for g in listed or [] if isinstance(g, str) and g.strip()), None)
+    return GENRES.get(name, name) if name else None
 
 
 def _part_order(qi: dict) -> list[str] | None:
@@ -453,6 +481,7 @@ def rip(track: dict, out_dir: str, keys_path: str | None = None, fmt: str = "wav
         year=str(track.get("year") or "") or None,
         bpm=track.get("bpm"),
         key=track.get("key"),
+        genre=track.get("genre"),
         cover=fetch_cover(track, out_dir, session) if cover else None,
         stems=stems,
         source="Fortnite Festival",

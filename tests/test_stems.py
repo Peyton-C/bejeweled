@@ -87,6 +87,7 @@ def test_tags_omit_empty_values(files):
                  stems=[Stem("Drums", paths["Drums"])])
     assert s2.tags()["BPM"] == "128"
     assert s2.tags()["date"] == "2024"
+    assert "genre" not in s2.tags()
 
 
 def test_bpm_keeps_its_decimals(files):

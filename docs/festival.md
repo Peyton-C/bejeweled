@@ -24,7 +24,7 @@ Lead and Other are summed because the stem format has a single slot for melodic 
 bejeweled reads the running order from each track rather than assuming it, so a change at Epic's end does not silently swap your stems around.
 
 ## Metadata
-Festival provides a significant amount of metadata about tracks that we can use, bejeweled uses the title, artist, musical key, mode, BPM, release year and cover art, which are all written into the stem file.
+Festival provides a significant amount of metadata about tracks that we can use, bejeweled uses the title, artist, musical key, mode, BPM, release year, genre and cover art, which are all written into the stem file.
 
 | Written | From | Stored as |
 | --- | --- | --- |
@@ -33,10 +33,22 @@ Festival provides a significant amount of metadata about tracks that we can use,
 | Year | `ry` | `©day` |
 | Key | `mk` + `mm`, as `Ab` / `Abm` | iTunes freeform `initialkey` |
 | BPM | `mt` | `tmpo`, and freeform `BPM` |
+| Genre | `ge`, under Apple Music's name for it | `©gen` |
 | Cover art | `au` | `covr` |
 | Provenance | this tool and the source | `©cmt` |
 
 bejeweled writes the BPM and key itself because FFmpeg's MP4 muxer silently drops them.
+
+Festival gives a genre for only a small part of its catalogue, so most rips have none. bejeweled writes the ones it gives as Apple Music names them, and nothing where there is none.
+
+| Festival | Written |
+| --- | --- |
+| `Pop` | Pop |
+| `Rock` | Rock |
+| `DanceElectronic` | Dance |
+| `RnB` | R&B/Soul |
+| `RapHipHop` | Hip-Hop/Rap |
+| `Country` | Country |
 
 Festival cuts are often a different mix from the commercial release, so the title gets the `(FN)` marker to keep the two apart in a library. Pass `--suffix` to change it, or `--no-suffix` to drop it.
 

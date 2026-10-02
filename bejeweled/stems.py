@@ -41,6 +41,7 @@ class StemSet:
     year: str | None = None
     bpm: float | None = None
     key: str | None = None
+    genre: str | None = None
     cover: str | None = None
     comment: str | None = None
     source: str | None = None
@@ -73,6 +74,7 @@ class StemSet:
             # 143 drifts a beat off within a few minutes
             "BPM": f"{self.bpm:.6f}".rstrip("0").rstrip(".") if self.bpm else None,
             "initial_key": self.key,
+            "genre": self.genre,
             "comment": self.comment,
         }
         return {k: v for k, v in pairs.items() if v}
