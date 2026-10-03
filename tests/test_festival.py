@@ -128,3 +128,15 @@ def test_parse_mpd_rejects_a_manifest_with_no_audio():
 ])
 def test_genre_is_written_under_apples_name(listed, expected):
     assert festival._genre(listed) == expected
+
+
+def test_catalog_reads_album_and_genre(monkeypatch):
+    def entry(**track):
+        return {"track": {"tt": "Song", "an": "Artist", "qi": json.dumps({"sid": "s"}), **track}}
+
+    class Reply:
+        def json(self):
+            return {"a": entry(ab="Fallen ", ge=["RnB"]), "b": entry(ab=""), "c": entry()}
+    monkeypatch.setattr(festival.requests, "get", lambda *a, **k: Reply())
+    found = [(t["album"], t["genre"]) for t in festival.catalog()]
+    assert found == [("Fallen", "R&B/Soul"), (None, None), (None, None)]

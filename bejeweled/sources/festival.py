@@ -97,6 +97,8 @@ def catalog(session: requests.Session | None = None) -> list[dict]:
             "sid": qi["sid"],
             "title": track.get("tt", "Unknown Title"),
             "artist": track.get("an", "Unknown Artist"),
+            # Given for few tracks, and sometimes as "" or with a trailing space
+            "album": (track.get("ab") or "").strip() or None,
             "year": track.get("ry"),
             "bpm": track.get("mt"),
             "duration": track.get("dn"),
@@ -478,6 +480,7 @@ def rip(track: dict, out_dir: str, keys_path: str | None = None, fmt: str = "wav
     return StemSet(
         title=title,
         artist=track["artist"],
+        album=track.get("album"),
         year=str(track.get("year") or "") or None,
         bpm=track.get("bpm"),
         key=track.get("key"),
