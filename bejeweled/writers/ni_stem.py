@@ -127,7 +127,8 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
         inject_itunes_tags(
             out_path,
             freeform={"initialkey": key, "BPM": bpm},
-            bpm=int(float(bpm)) if bpm else None,
+            # tmpo only holds a whole number; the exact value is in the freeform BPM
+            bpm=round(float(bpm)) if bpm else None,
         )
 
     inject_metadata(out_path, {

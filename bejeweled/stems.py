@@ -69,7 +69,9 @@ class StemSet:
             "artist": self.artist,
             "album": self.album,
             "date": self.year,
-            "BPM": str(int(self.bpm)) if self.bpm else None,
+            # Decimals kept: Mixxx analyses Bad Girls at 143.297, and a grid laid at
+            # 143 drifts a beat off within a few minutes
+            "BPM": f"{self.bpm:.6f}".rstrip("0").rstrip(".") if self.bpm else None,
             "initial_key": self.key,
             "comment": self.comment,
         }

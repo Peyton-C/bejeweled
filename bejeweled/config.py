@@ -51,6 +51,26 @@ backgrounds = ["#1E1E1E"]
 # Record which tool and which source produced the file, in the comment field.
 write_comment = true
 
+[separate]
+# roformer is the cleanest. hybrid is a little less clean but never lost to demucs
+# on a track. demucs is several times faster than either, and needs no
+# audio-separator.
+separator = "roformer"
+
+# The demucs model, for demucs and the second half of the hybrid. Left unset,
+# demucs uses htdemucs and the hybrid htdemucs_ft.
+# model = "htdemucs"
+
+# demucs's device: cpu, cuda or mps. Left unset, Apple Silicon uses mps and
+# anything else lets demucs choose. audio-separator picks its own.
+# device = "mps"
+
+# Mark separated titles so they are not mistaken for real stems. Each separator has
+# its own letters, RF for roformer, HY for hybrid and DE for demucs, followed by SR
+# for a surround mix or AT for an Atmos render: (RF), (RF SR), (RF AT). Setting
+# title_suffix here replaces them all.
+mark_titles = true
+
 [festival]
 # Epic's key database. Not distributed with this project.
 # keys = "~/.config/bejeweled/keys.bin"

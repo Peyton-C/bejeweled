@@ -9,7 +9,7 @@ import os
 
 from ..stems import Stem, StemSet
 
-AUDIO_EXTENSIONS = (".wav", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".opus", ".ogg")
+AUDIO_EXTENSIONS = (".wav", ".wv", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".opus", ".ogg")
 
 # The user supplied this audio and knows what it is, so nothing is marked unless they
 # ask for it. They may still want the origin recorded, so a marker is available.
@@ -37,7 +37,7 @@ def from_folder(folder: str, title: str | None = None, artist: str | None = None
     kept under its own name rather than dropped, and folding happens at write time.
     """
     if not os.path.isdir(folder):
-        raise NotADirectoryError(folder)
+        raise FileNotFoundError(f"no such folder: {folder}")
 
     stems, master = [], None
     for entry in sorted(os.listdir(folder)):

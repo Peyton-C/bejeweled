@@ -87,3 +87,22 @@ def test_tags_omit_empty_values(files):
                  stems=[Stem("Drums", paths["Drums"])])
     assert s2.tags()["BPM"] == "128"
     assert s2.tags()["date"] == "2024"
+
+
+def test_bpm_keeps_its_decimals(files):
+    """A DJ grid laid at a truncated tempo drifts off the beat."""
+    paths = files("Drums")
+    s = StemSet(title="Song", bpm=143.297, stems=[Stem("Drums", paths["Drums"])])
+    assert s.tags()["BPM"] == "143.297"
+
+
+def test_version_comes_from_the_project_metadata():
+    """Hardcoding it once left every stem file claiming 0.1.0 after 0.1.1 shipped."""
+    import tomllib
+    from pathlib import Path
+
+    import bejeweled
+
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    with open(pyproject, "rb") as f:
+        assert bejeweled.__version__ == tomllib.load(f)["project"]["version"]
