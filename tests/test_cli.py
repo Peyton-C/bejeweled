@@ -89,7 +89,7 @@ def test_stem_file_verbs_stay_top_level(parser):
     assert parser.parse_args(["info", "a.stem.mp4"]).files == ["a.stem.mp4"]
     assert parser.parse_args(["recolor", "a.stem.mp4", "--palette", "vivid-dark"]).files
     assert parser.parse_args(["palette"]).name is None
-    assert parser.parse_args(["convert", "./stems"]).folder == "./stems"
+    assert parser.parse_args(["convert", "./stems"]).inputs == ["./stems"]
 
 
 def test_recolor_requires_a_palette(parser):
@@ -109,3 +109,14 @@ def test_festival_rip_options(parser):
     assert args.suffix == "(FN)"
     assert args.keep_countin
     assert args.no_cover
+
+
+def test_convert_takes_stem_files_and_an_engine_library(parser):
+    args = parser.parse_args(["convert", "a.stem.mp4", "b.stem.mp4", "--format", "engine",
+                              "--engine-library", "/music/Engine Library"])
+    assert (args.inputs, args.format, args.engine_library) == (
+        ["a.stem.mp4", "b.stem.mp4"], "engine", "/music/Engine Library")
+    # A stem file can only become Engine stems, so the format is left to the input
+    assert parser.parse_args(["convert", "a.stem.mp4"]).format is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["convert", "./stems", "--format", "files"])

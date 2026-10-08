@@ -58,7 +58,7 @@ def _format(fmt: str | None, cfg: dict) -> str:
     return fmt
 
 
-def _engine(fmt: str, cfg: dict, library: str | None, key: str | None):
+def engine_target(fmt: str, cfg: dict, library: str | None, key: str | None):
     """The Engine DJ library and key an `engine` job writes with, or None for the rest.
 
     Resolved before the job starts, so a missing key or an open Engine costs nothing
@@ -73,7 +73,7 @@ def _engine(fmt: str, cfg: dict, library: str | None, key: str | None):
     return target, engine.find_key(key, cfg)
 
 
-def _write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
+def write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
     """Add the stem file to the library as a track, and write its stems beside it.
 
     The stem file is the track Engine plays, since its default stream is the mixdown,
@@ -83,6 +83,25 @@ def _write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
     with library.writing() as db:
         track = library.register(db, track_path, stem_set)
         return engine_stem.write(stem_set, library.stems_path(track), key, merge=merge)
+
+
+def stem_file_to_engine(path: str, cfg: dict, *, engine_library: str | None = None,
+                        engine_key: str | None = None) -> Written:
+    """Give an existing NI stem file its Engine DJ stems.
+
+    The stem file is left where it is and becomes the track Engine plays, so one
+    already in the library only gains its stems.
+    """
+    import tempfile
+
+    from .sources import local
+
+    target = engine_target("engine", cfg, engine_library, engine_key)
+    path = os.path.abspath(path)
+    with tempfile.TemporaryDirectory(prefix="bejeweled-") as work:
+        stem_set = local.from_stem_file(path, work)
+        stems = write_engine(stem_set, path, target, None)
+    return Written(path, stem_set, stems)
 
 
 # -------------------------------------------------------------------------- festival
@@ -112,7 +131,7 @@ def rip_festival(track: dict, out_dir: str, cfg: dict, *, keys: str | None = Non
     from .sources import festival
 
     fmt = _format(fmt, cfg)
-    target = _engine(fmt, cfg, engine_library, engine_key)
+    target = engine_target(fmt, cfg, engine_library, engine_key)
     out_dir = os.path.abspath(out_dir)
     work = os.path.join(out_dir, f"{safe(track['title'])} - stems")
     fest_cfg = cfg.get("festival", {})
@@ -130,7 +149,7 @@ def rip_festival(track: dict, out_dir: str, cfg: dict, *, keys: str | None = Non
         return Written(work, stem_set)
 
     out_path = _write_ni(stem_set, out_dir, cfg, festival.NI_MERGE, codec, palette)
-    stems = target and _write_engine(stem_set, out_path, target, festival.NI_MERGE)
+    stems = target and write_engine(stem_set, out_path, target, festival.NI_MERGE)
     for stem in stem_set.stems:
         os.remove(stem.path)
     if stem_set.cover and os.path.exists(stem_set.cover):
@@ -194,7 +213,7 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
     from .sources import separate
 
     fmt = _format(fmt, cfg)
-    target = _engine(fmt, cfg, engine_library, engine_key)
+    target = engine_target(fmt, cfg, engine_library, engine_key)
     sep_cfg = cfg.get("separate", {})
     out_dir = os.path.abspath(out_dir)
     base = os.path.splitext(os.path.basename(path))[0]
@@ -218,7 +237,7 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
         return Written(work, stem_set)
 
     out_path = _write_ni(stem_set, out_dir, cfg, separate.NI_MERGE, codec, palette)
-    stems = target and _write_engine(stem_set, out_path, target, separate.NI_MERGE)
+    stems = target and write_engine(stem_set, out_path, target, separate.NI_MERGE)
     written = [s.path for s in stem_set.stems] + [stem_set.cover]
     if stem_set.master != os.path.abspath(path):
         written.append(stem_set.master)

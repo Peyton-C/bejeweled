@@ -272,7 +272,7 @@ def test_a_failed_write_leaves_the_library_as_it_was(library, stem_set, tmp_path
 
     monkeypatch.setattr(engine_stem, "_encode", fail)
     with pytest.raises(ff.FFmpegError):
-        jobs._write_engine(stem_set, track_file, (library, KEY), None)
+        jobs.write_engine(stem_set, track_file, (library, KEY), None)
 
     assert _rows(library, "SELECT id FROM Track") == []
     assert _rows(library, "SELECT trackId FROM PerformanceData") == []
@@ -283,7 +283,7 @@ def test_the_job_adds_the_track_and_writes_its_stems(library, stem_set, tmp_path
     track_file = str(tmp_path / "Test Track.stem.mp4")
     ni_stem.write(stem_set, track_file)
 
-    stems = jobs._write_engine(stem_set, track_file, (library, KEY), None)
+    stems = jobs.write_engine(stem_set, track_file, (library, KEY), None)
 
     assert stems == os.path.join(library.root, "Stems", f"1 {UUID}.stems")
     assert engine_stem.decrypt_file(stems, str(tmp_path / "plain.mp4"), KEY) > 40
@@ -293,7 +293,55 @@ def test_the_job_adds_the_track_and_writes_its_stems(library, stem_set, tmp_path
 def test_an_engine_job_fails_before_any_work_without_a_key(library, monkeypatch):
     monkeypatch.delenv("BEJEWELED_ENGINE_KEY", raising=False)
     with pytest.raises(engine.EngineError, match="no Engine DJ key"):
-        jobs._engine("engine", {}, library.root, None)
-    assert jobs._engine("ni-stem", {}, None, None) is None
+        jobs.engine_target("engine", {}, library.root, None)
+    assert jobs.engine_target("ni-stem", {}, None, None) is None
     with pytest.raises(ValueError, match="unknown format"):
         jobs._format("serato", {})
+
+
+# ------------------------------------------------------------------- from a stem file
+
+def test_a_stem_file_is_read_back_as_its_four_stems(stem_set, tmp_path):
+    from bejeweled.sources import local
+
+    track_file = str(tmp_path / "Test Track.stem.mp4")
+    ni_stem.write(stem_set, track_file)
+
+    read = local.from_stem_file(track_file, str(tmp_path / "work"))
+    assert read.names() == list(NI_SLOTS)
+    assert (read.title, read.artist, read.album, read.year) == (
+        "Test Track", "Tester", "Tests", "2020")
+    assert (read.bpm, read.key, read.master) == (143.297, "F#m", track_file)
+
+    with pytest.raises(ValueError, match="not a stem file"):
+        local.from_stem_file(stem_set.stems[0].path, str(tmp_path / "work"))
+
+
+def test_a_stem_file_gains_engine_stems_where_it_stands(library, stem_set, tmp_path, ffmpeg,
+                                                        monkeypatch):
+    monkeypatch.setenv("BEJEWELED_ENGINE_KEY", KEY.hex())
+    track_file = str(tmp_path / "Test Track.stem.mp4")
+    ni_stem.write(stem_set, track_file)
+    before = os.path.getmtime(track_file)
+
+    written = jobs.stem_file_to_engine(track_file, {}, engine_library=library.root)
+
+    assert written.path == track_file and os.path.getmtime(track_file) == before
+    assert written.engine_stems == os.path.join(library.root, "Stems", f"1 {UUID}.stems")
+    row, = _rows(library, "SELECT title, path, key FROM Track")
+    assert row == {"title": "Test Track", "path": "../Test Track.stem.mp4", "key": 7}
+
+    # Vocals are the stem file's last track and Engine's first pair
+    plain = str(tmp_path / "plain.mp4")
+    engine_stem.decrypt_file(written.engine_stems, plain, KEY)
+    raw = subprocess.run([ffmpeg, "-v", "error", "-i", plain, "-f", "s16le", "-"],
+                         capture_output=True, check=True).stdout
+    samples = memoryview(raw).cast("h")
+    channel = samples[0::8][len(samples) // 32:len(samples) // 32 + 22050]
+    crossings = sum(1 for a, b in zip(channel, channel[1:]) if (a < 0) != (b < 0))
+    assert crossings == pytest.approx(880, rel=0.05)
+
+    # Converting it again finds the track, and only replaces the stems
+    again = jobs.stem_file_to_engine(track_file, {}, engine_library=library.root)
+    assert again.engine_stems == written.engine_stems
+    assert len(_rows(library, "SELECT id FROM Track")) == 1

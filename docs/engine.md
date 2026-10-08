@@ -4,6 +4,7 @@ bejeweled can add a song to an Engine DJ library together with its stems, so Eng
 ```sh
 bejeweled festival rip "Kill Bill" --format engine --engine-library "~/Music/Engine Library" -o ~/Music/Stems
 bejeweled separate "Song.flac" --format engine -o ~/Music/Stems
+bejeweled convert ~/Music/Stems/*.stem.mp4          # stem files you already have
 ```
 
 `--engine-library` is the folder named Engine Library. Set `library` under `[engine]` in the config to leave it off.
@@ -25,6 +26,13 @@ A file already in the library is not added again. bejeweled only replaces its st
 
 Before its first write to a library bejeweled copies the database to `engine-backups` in its config folder.
 
+## Existing stem files
+`bejeweled convert` gives a `.stem.mp4` its Engine stems without writing it again, whichever tool made it. The file stays where it is and becomes the track, so one already in your library keeps its analysis, cues and playlists and only gains stems.
+
+These stems are decoded from the stem file and encoded again, so from an AAC stem file they are compressed twice. Use `--format engine` when the stems are first made to avoid that.
+
+`convert` on a folder of stems takes `--format engine` too.
+
 ## Stems
 Engine has the same four stems as the Native Instruments format in a different order, so a source with more parts is folded the same way.
 
@@ -35,7 +43,7 @@ Engine has the same four stems as the Native Instruments format in a different o
 | 5-6 | Drums |
 | 7-8 | Other |
 
-bejeweled encodes them from the source's own stems, not from the `.stem.mp4`, so they are compressed once. They are always AAC at 44.1 kHz, and `--codec` only changes the `.stem.mp4`.
+From a rip or a separation, bejeweled encodes them from the source's own stems, not from the `.stem.mp4`, so they are compressed once. They are always AAC at 44.1 kHz, and `--codec` only changes the `.stem.mp4`.
 
 ## Inside the file
 A `.stems` file is an MP4 holding one 8 channel AAC track and nothing else, no tags and no mixdown. Engine encrypts the audio packets and leaves the container readable: each packet is padded to a 16 byte boundary and encrypted with AES-128 in ECB mode. Engine shows a plain file as having stems and then fails to play them.
