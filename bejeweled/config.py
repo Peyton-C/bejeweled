@@ -15,8 +15,9 @@ TEMPLATE = '''\
 # bejeweled configuration
 
 [output]
-# What a rip is written as: "ni-stem" for a .stem.mp4, or "files" for separate
-# stem files with no container.
+# What a rip is written as: "ni-stem" for a .stem.mp4, "engine" for a .stem.mp4
+# added to an Engine DJ library with its stems, or "files" for separate stem files
+# with no container.
 format = "ni-stem"
 
 # aac, alac, flac, opus or wav. NI's own spec allows only aac and alac, but Mixxx
@@ -70,6 +71,15 @@ separator = "roformer"
 # for a surround mix or AT for an Atmos render: (RF), (RF SR), (RF AT). Setting
 # title_suffix here replaces them all.
 mark_titles = true
+
+[engine]
+# The folder named Engine Library, for format = "engine". Quit Engine DJ before
+# writing to it.
+# library = "~/Music/Engine Library"
+
+# The key Engine DJ encrypts stems with, as 32 hex characters. Not distributed
+# with this project.
+# key = ""
 
 [festival]
 # Epic's key database. Not distributed with this project.

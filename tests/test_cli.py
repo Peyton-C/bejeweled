@@ -43,11 +43,21 @@ def test_output_format_is_a_flag_with_a_closed_set(parser):
     ).format == "ni-stem"
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["festival", "rip", "x", "--format", "engine"])
+        parser.parse_args(["festival", "rip", "x", "--format", "serato"])
 
 
-def test_formats_are_the_two_intended_outputs():
-    assert set(FORMATS) == {"ni-stem", "files"}
+def test_formats_are_the_three_intended_outputs():
+    assert set(FORMATS) == {"ni-stem", "engine", "files"}
+
+
+def test_engine_takes_its_library_and_key_from_either_source(parser):
+    args = parser.parse_args(["festival", "rip", "x", "--format", "engine",
+                              "--engine-library", "/music/Engine Library"])
+    assert (args.format, args.engine_library, args.engine_key) == (
+        "engine", "/music/Engine Library", None)
+    assert parser.parse_args(
+        ["separate", "a.wav", "--format", "engine", "--engine-key", "00" * 16]
+    ).engine_key == "00" * 16
 
 
 def test_separate_takes_a_file_and_the_shared_output_options(parser):

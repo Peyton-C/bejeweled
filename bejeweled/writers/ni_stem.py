@@ -102,15 +102,8 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
     groups = folded.extra["ni_groups"]
 
     with tempfile.TemporaryDirectory(prefix="bejeweled-") as work:
-        slot_paths = []
-        for slot in NI_SLOTS:
-            members = groups[slot]
-            if len(members) == 1:
-                slot_paths.append(members[0].path)
-            else:
-                merged = os.path.join(work, f"{slot.lower()}.wav")
-                ff.mix(ffmpeg, [m.path for m in members], merged)
-                slot_paths.append(merged)
+        slots = slot_files(ffmpeg, groups, work)
+        slot_paths = [slots[slot] for slot in NI_SLOTS]
 
         master = stem_set.master
         if not master:
@@ -137,6 +130,18 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
         "version": 1,
     })
     return out_path
+
+
+def slot_files(ffmpeg: str, groups: dict, work: str) -> dict[str, str]:
+    """One audio file per slot, summing any slot that several stems fold into."""
+    paths = {}
+    for slot, members in groups.items():
+        if len(members) == 1:
+            paths[slot] = members[0].path
+        else:
+            paths[slot] = os.path.join(work, f"{slot.lower()}.wav")
+            ff.mix(ffmpeg, [m.path for m in members], paths[slot])
+    return paths
 
 
 def recolor(path: str, colors) -> str:

@@ -15,7 +15,7 @@ from .writers import ni_stem
 
 # What a rip is written as. Sources are scoped to their own subcommand because they
 # take different arguments; outputs are a flag because every writer takes a StemSet.
-FORMATS = ("ni-stem", "files")
+FORMATS = jobs.FORMATS
 
 
 def _add_output_options(parser, with_format=True):
@@ -26,7 +26,11 @@ def _add_output_options(parser, with_format=True):
                         help="palette name, or 4 comma-separated hex colours")
     if with_format:
         parser.add_argument("--format", choices=FORMATS, default=None,
-                            help="ni-stem (a .stem.mp4) or files (separate stems)")
+                            help="ni-stem (a .stem.mp4), engine (a .stem.mp4 added to an "
+                                 "Engine DJ library with its stems) or files (separate stems)")
+        parser.add_argument("--engine-library",
+                            help="the Engine Library folder, for --format engine")
+        parser.add_argument("--engine-key", help="Engine DJ's stems key, as hex")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -151,7 +155,8 @@ def _rip(args) -> int:
     written = jobs.rip_festival(
         track, args.out, cfg, keys=args.keys, suffix=args.suffix, no_suffix=args.no_suffix,
         cover=not args.no_cover, trim_countin=not args.keep_countin, fmt=args.format,
-        codec=args.codec, palette=args.palette, progress=progress,
+        codec=args.codec, palette=args.palette, engine_library=args.engine_library,
+        engine_key=args.engine_key, progress=progress,
     )
     print()
 
@@ -177,6 +182,8 @@ def _report(written) -> None:
         print(f"wrote {len(written.stem_set.stems)} stems to {written.path}")
     else:
         print(f"wrote {written.path}")
+    if written.engine_stems:
+        print(f"wrote {written.engine_stems}")
 
 
 def _separate(args) -> int:
@@ -234,7 +241,8 @@ def _separate_one(path, args, cfg) -> int:
     written = jobs.separate_file(
         path, args.out, cfg, separator=args.separator, layout=args.layout,
         model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
-        fmt=args.format, codec=args.codec, palette=args.palette, progress=progress,
+        fmt=args.format, codec=args.codec, palette=args.palette,
+        engine_library=args.engine_library, engine_key=args.engine_key, progress=progress,
     )
     print()
 

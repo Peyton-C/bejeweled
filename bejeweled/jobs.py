@@ -11,15 +11,21 @@ from dataclasses import dataclass
 
 from . import __version__, config
 from .stems import StemSet
-from .writers import ni_stem
+from .writers import engine_stem, ni_stem
+
+FORMATS = ("ni-stem", "engine", "files")
 
 
 @dataclass
 class Written:
-    """What a job left behind: the stem file, or the folder of stems for `files`."""
+    """What a job left behind: the stem file, or the folder of stems for `files`.
+
+    `engine_stems` is the sidecar written into an Engine DJ library, for `engine`.
+    """
 
     path: str
     stem_set: StemSet
+    engine_stems: str | None = None
 
 
 def safe(name: str) -> str:
@@ -46,7 +52,37 @@ def _write_ni(stem_set: StemSet, out_dir: str, cfg: dict, merge, codec, palette)
 
 
 def _format(fmt: str | None, cfg: dict) -> str:
-    return fmt or cfg.get("output", {}).get("format", "ni-stem")
+    fmt = fmt or cfg.get("output", {}).get("format", "ni-stem")
+    if fmt not in FORMATS:
+        raise ValueError(f"unknown format {fmt!r}, expected one of {', '.join(FORMATS)}")
+    return fmt
+
+
+def _engine(fmt: str, cfg: dict, library: str | None, key: str | None):
+    """The Engine DJ library and key an `engine` job writes with, or None for the rest.
+
+    Resolved before the job starts, so a missing key or an open Engine costs nothing
+    rather than a finished separation.
+    """
+    if fmt != "engine":
+        return None
+    from . import engine
+
+    target = engine.Library(engine.find_library(library, cfg))
+    target.check_closed()
+    return target, engine.find_key(key, cfg)
+
+
+def _write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
+    """Add the stem file to the library as a track, and write its stems beside it.
+
+    The stem file is the track Engine plays, since its default stream is the mixdown,
+    so the two cannot drift apart. The row and the stems go in together or not at all.
+    """
+    library, key = target
+    with library.writing() as db:
+        track = library.register(db, track_path, stem_set)
+        return engine_stem.write(stem_set, library.stems_path(track), key, merge=merge)
 
 
 # -------------------------------------------------------------------------- festival
@@ -71,9 +107,12 @@ def festival_output(track: dict, out_dir: str, cfg: dict, suffix: str | None = N
 def rip_festival(track: dict, out_dir: str, cfg: dict, *, keys: str | None = None,
                  suffix: str | None = None, no_suffix: bool = False, cover: bool = True,
                  trim_countin: bool = True, fmt: str | None = None, codec: str | None = None,
-                 palette: str | None = None, progress=None) -> Written:
+                 palette: str | None = None, engine_library: str | None = None,
+                 engine_key: str | None = None, progress=None) -> Written:
     from .sources import festival
 
+    fmt = _format(fmt, cfg)
+    target = _engine(fmt, cfg, engine_library, engine_key)
     out_dir = os.path.abspath(out_dir)
     work = os.path.join(out_dir, f"{safe(track['title'])} - stems")
     fest_cfg = cfg.get("festival", {})
@@ -87,16 +126,17 @@ def rip_festival(track: dict, out_dir: str, cfg: dict, *, keys: str | None = Non
     if cfg.get("metadata", {}).get("write_comment", True):
         stem_set.comment = stem_set.describe_source(__version__)
 
-    if _format(fmt, cfg) == "files":
+    if fmt == "files":
         return Written(work, stem_set)
 
     out_path = _write_ni(stem_set, out_dir, cfg, festival.NI_MERGE, codec, palette)
+    stems = target and _write_engine(stem_set, out_path, target, festival.NI_MERGE)
     for stem in stem_set.stems:
         os.remove(stem.path)
     if stem_set.cover and os.path.exists(stem_set.cover):
         os.remove(stem_set.cover)
     os.rmdir(work)
-    return Written(out_path, stem_set)
+    return Written(out_path, stem_set, stems)
 
 
 # -------------------------------------------------------------------------- separate
@@ -148,10 +188,13 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
                   layout: str | None = None, model: str | None = None,
                   device: str | None = None, suffix: str | None = None,
                   no_suffix: bool = False, fmt: str | None = None, codec: str | None = None,
-                  palette: str | None = None, progress=None) -> Written:
+                  palette: str | None = None, engine_library: str | None = None,
+                  engine_key: str | None = None, progress=None) -> Written:
     from . import demucs as dm
     from .sources import separate
 
+    fmt = _format(fmt, cfg)
+    target = _engine(fmt, cfg, engine_library, engine_key)
     sep_cfg = cfg.get("separate", {})
     out_dir = os.path.abspath(out_dir)
     base = os.path.splitext(os.path.basename(path))[0]
@@ -171,10 +214,11 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
     if cfg.get("metadata", {}).get("write_comment", True):
         stem_set.comment = stem_set.describe_source(__version__)
 
-    if _format(fmt, cfg) == "files":
+    if fmt == "files":
         return Written(work, stem_set)
 
     out_path = _write_ni(stem_set, out_dir, cfg, separate.NI_MERGE, codec, palette)
+    stems = target and _write_engine(stem_set, out_path, target, separate.NI_MERGE)
     written = [s.path for s in stem_set.stems] + [stem_set.cover]
     if stem_set.master != os.path.abspath(path):
         written.append(stem_set.master)
@@ -185,4 +229,4 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
     # did not write, such as a RoFormer's Guitar and Piano, which are not ours to delete
     if not os.listdir(work):
         os.rmdir(work)
-    return Written(out_path, stem_set)
+    return Written(out_path, stem_set, stems)

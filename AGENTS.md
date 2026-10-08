@@ -108,14 +108,20 @@ source slots in without touching the rest.
 
 ```
 sources/           StemSet            writers/
-  festival.py  ->  title, stems,  ->    ni_stem.py   .stem.mp4
-  local.py         master, tags         (or no writer: --format files)
+  festival.py  ->  title, stems,  ->    ni_stem.py      .stem.mp4
+  local.py         master, tags         engine_stem.py  .stems
+                                        (or no writer: --format files)
 ```
 
 The two axes are deliberately asymmetric. Sources keep multiplying, and each arrives
 with its own arguments, so each gets its own subcommand. Outputs do not multiply: NI
-stems, or the raw stems with no container. That is the whole list, which is why a flag
-suffices. Do not add an output format without asking.
+stems, NI stems added to an Engine DJ library, or the raw stems with no container. That
+is the whole list, which is why a flag suffices. Do not add an output format without
+asking.
+
+`engine` is the one output that is not a file on its own. Engine's stems are a sidecar
+to a track in a library, so `engine.py` owns the library and its database while
+`writers/engine_stem.py` only makes the audio, and `jobs.py` puts the two together.
 
 `jobs.py` runs a source through to a written file. The command line and the MCP server
 both call it, so neither carries its own copy of the pipeline, and a setting resolves
