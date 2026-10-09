@@ -3,12 +3,15 @@
 inMusic documents third-party writes to the database, with two rules that shape this
 module: Engine must not be running, and the schema must not change. So bejeweled only
 ever inserts a Track row, shaped like the one Engine writes when it imports a file with
-analysis switched off, and leaves the rest to Engine's own triggers and analysis.
+analysis switched off, and its cover art, and leaves the rest to Engine's own triggers
+and analysis.
 
 https://support.enginedj.com/support/solutions/articles/69000834165
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import math
 import os
 import re
@@ -181,6 +184,35 @@ class Library:
         finally:
             db.close()
 
+    def add_artwork(self, db: sqlite3.Connection, path: str, ffmpeg: str) -> int | None:
+        """Give the library the cover art embedded in an audio file, if it has any.
+
+        Engine keeps art outside the database: AlbumArt holds the SHA-1 of the image
+        as the file carries it, with the albumArt column empty, and the picture itself
+        is a thumbnail in Artwork named for that hash in URL-safe base64. Read back
+        from a FLAC Engine imported, whose embedded JPEG hashed to its row.
+        """
+        embedded = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", path, "-map", "0:v:0", "-c", "copy",
+             "-f", "image2pipe", "-"], capture_output=True).stdout
+        if not embedded:
+            return None
+        digest = hashlib.sha1(embedded).digest()
+        found = db.execute("SELECT id FROM AlbumArt WHERE hash = ?", (digest,)).fetchone()
+        name = base64.urlsafe_b64encode(digest).rstrip(b"=").decode() + ".jpg"
+        thumbnail = os.path.join(self.root, "Artwork", name)
+        if not os.path.exists(thumbnail):
+            os.makedirs(os.path.dirname(thumbnail), exist_ok=True)
+            # 256 pixels is what Engine makes of larger art, and it left a 250 pixel
+            # cover at 250, so nothing is scaled up
+            ff.run([ffmpeg, "-y", "-i", path, "-map", "0:v:0", "-frames:v", "1",
+                    "-update", "1", "-q:v", "3", "-vf",
+                    "scale='min(256,iw)':'min(256,ih)':force_original_aspect_ratio=decrease",
+                    thumbnail])
+        if found:
+            return found[0]
+        return db.execute("INSERT INTO AlbumArt (hash) VALUES (?)", (digest,)).lastrowid
+
     def register(self, db: sqlite3.Connection, path: str, stem_set: StemSet,
                  ffmpeg: str | None = None) -> Track:
         """Find the track for this audio file, adding it to the library if it is new.
@@ -190,12 +222,20 @@ class Library:
         """
         path = os.path.abspath(path)
         relative = os.path.relpath(path, self.root).replace(os.sep, "/")
-        found = db.execute("SELECT originTrackId, originDatabaseUuid FROM Track "
-                           "WHERE path = ?", (relative,)).fetchone()
+        found = db.execute("SELECT originTrackId, originDatabaseUuid, id, albumArtId "
+                           "FROM Track WHERE path = ?", (relative,)).fetchone()
+        ffmpeg = ff.find_ffmpeg(ffmpeg)
         if found:
+            # Engine never leaves this empty, a track it found no art in points at
+            # a row with no hash. So an empty one is a track bejeweled added before
+            # it wrote art, and filling it in overrides nothing of Engine's
+            if found[3] is None:
+                art = self.add_artwork(db, path, ffmpeg)
+                if art is not None:
+                    db.execute("UPDATE Track SET albumArtId = ? WHERE id = ?", (art, found[2]))
             return Track(found[0], found[1], added=False)
 
-        info = ff.probe(ff.find_ffmpeg(ffmpeg), path)
+        info = ff.probe(ffmpeg, path)
         audio = next(s for s in info["streams"] if s.get("codec_type") == "audio")
         stat = os.stat(path)
         year = re.match(r"\d{4}", stem_set.year or "")
@@ -220,9 +260,13 @@ class Library:
             "rating": 0,
             "isPlayed": 0,
             "fileType": os.path.splitext(path)[1].lstrip(".").lower(),
-            # Left for Engine: the waveform, beat grid and cover art all come from
-            # its analysis, and a track marked unanalysed is one it will pick up
+            # Left for Engine: the waveform and beat grid come from its analysis,
+            # and a track marked unanalysed is one it will pick up
             "isAnalyzed": 0,
+            # Not left for Engine: it reads cover art when it imports a file and
+            # never again, so the 37 tracks added without it stayed blank through
+            # analysis
+            "albumArtId": self.add_artwork(db, path, ffmpeg),
             "dateCreated": int(getattr(stat, "st_birthtime", stat.st_mtime)),
             "dateAdded": int(time.mktime((today.tm_year, today.tm_mon, today.tm_mday,
                                           0, 0, 0, 0, 0, -1))),

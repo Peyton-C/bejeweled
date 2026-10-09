@@ -16,13 +16,14 @@ Quit Engine DJ first. bejeweled refuses to write while it is open, because two p
 | --- | --- |
 | The `.stem.mp4` | The `-o` folder |
 | A track for it | The library's database |
+| Its cover art | `Artwork` inside the library |
 | A `.stems` file | `Stems` inside the library |
 
 The `.stem.mp4` is the track Engine plays, and Engine remembers where it is. Write it to the folder it will live in, moving it afterwards loses the track.
 
-bejeweled adds the track unanalysed, the way Engine adds one with automatic analysis switched off, so analyse it in Engine as you would any import. bejeweled does not add cover art to the library.
+bejeweled adds the track unanalysed, the way Engine adds one with automatic analysis switched off, so analyse it in Engine as you would any import. bejeweled adds the cover art itself, because Engine only reads it when it imports a file.
 
-A file already in the library is not added again. bejeweled only replaces its stems, and leaves the track and its analysis as they are.
+A file already in the library is not added again. bejeweled only replaces its stems, and leaves the track and its analysis as they are. A track bejeweled added before it wrote cover art gains it.
 
 Before its first write to a library bejeweled copies the database to `engine-backups` in its config folder.
 
@@ -51,6 +52,8 @@ A `.stems` file is an MP4 holding one 8 channel AAC track and nothing else, no t
 Nothing in the database says a track has stems. Engine looks for a file named after the track, `<origin track id> <origin database uuid>.stems`, and the origin is the library the track was first added to. A library copied to a drive keeps those ids, which is why bejeweled reads them back from the database instead of using the track's own id.
 
 ## Inside the library
-inMusic [documents](https://support.enginedj.com/support/solutions/articles/69000834165) third-party writes to the database and asks that Engine be closed and the schema left unchanged. bejeweled inserts one track and nothing else, and Engine's own triggers give it its origin id and its empty analysis.
+inMusic [documents](https://support.enginedj.com/support/solutions/articles/69000834165) third-party writes to the database and asks that Engine be closed and the schema left unchanged. bejeweled inserts one track and its cover art and nothing else, and Engine's own triggers give it its origin id and its empty analysis.
+
+Engine keeps cover art outside the database. `AlbumArt` holds the SHA-1 of the picture embedded in the file, and the picture is a JPEG no larger than 256 pixels in `Artwork`, named for that hash in URL-safe base64.
 
 bejeweled writes to schema version 3 and leaves a library on any other version alone.

@@ -236,6 +236,70 @@ def test_a_track_is_added_the_way_engine_imports_one(library, stem_set, tmp_path
     assert sqlite3.connect(kept).execute("SELECT count(*) FROM Track").fetchone() == (0,)
 
 
+@pytest.fixture
+def covered(stem_set, ffmpeg, tmp_path):
+    """The stem set with cover art larger than Engine keeps."""
+    cover = str(tmp_path / "cover.jpg")
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", "color=red:size=600x600",
+                    "-frames:v", "1", "-update", "1", cover], check=True)
+    return StemSet(title=stem_set.title, artist=stem_set.artist, stems=stem_set.stems,
+                   cover=cover)
+
+
+def _embedded(ffmpeg, path):
+    return subprocess.run([ffmpeg, "-v", "error", "-i", path, "-map", "0:v:0", "-c", "copy",
+                           "-f", "image2pipe", "-"], capture_output=True, check=True).stdout
+
+
+def test_cover_art_is_added_the_way_engine_keeps_it(library, covered, tmp_path, ffmpeg):
+    import base64
+    import hashlib
+
+    first, second = str(tmp_path / "One.stem.mp4"), str(tmp_path / "Two.stem.mp4")
+    ni_stem.write(covered, first)
+    ni_stem.write(covered, second)
+    with library.writing() as db:
+        library.register(db, first, covered)
+        library.register(db, second, covered)
+
+    # The hash is of the picture as the file carries it, and the row holds no image
+    art, = _rows(library, "SELECT * FROM AlbumArt")
+    assert art["hash"] == hashlib.sha1(_embedded(ffmpeg, first)).digest()
+    assert art["albumArt"] is None
+    # Two tracks with one cover share it
+    assert [r["albumArtId"] for r in _rows(library, "SELECT albumArtId FROM Track")] == [art["id"]] * 2
+
+    name = base64.urlsafe_b64encode(art["hash"]).rstrip(b"=").decode() + ".jpg"
+    assert os.listdir(os.path.join(library.root, "Artwork")) == [name]
+    thumbnail, = ff.probe(ffmpeg, os.path.join(library.root, "Artwork", name))["streams"]
+    assert (thumbnail["codec_name"], thumbnail["width"], thumbnail["height"]) == ("mjpeg", 256, 256)
+
+
+def test_a_track_added_without_its_art_gains_it(library, covered, tmp_path):
+    track_file = str(tmp_path / "Test Track.stem.mp4")
+    ni_stem.write(covered, track_file)
+    db = sqlite3.connect(library.database)
+    db.execute("INSERT INTO Track (path, title) VALUES (?, 'Kept')",
+               (os.path.relpath(track_file, library.root).replace(os.sep, "/"),))
+    db.commit()
+    db.close()
+
+    with library.writing() as db:
+        assert not library.register(db, track_file, covered).added
+    row, = _rows(library, "SELECT title, albumArtId FROM Track")
+    assert row == {"title": "Kept", "albumArtId": 1}
+
+    # Art Engine settled on is its own, including its row for a track with none
+    db = sqlite3.connect(library.database)
+    db.execute("INSERT INTO AlbumArt (hash) VALUES (NULL)")
+    db.execute("UPDATE Track SET albumArtId = 2")
+    db.commit()
+    db.close()
+    with library.writing() as db:
+        library.register(db, track_file, covered)
+    assert _rows(library, "SELECT albumArtId FROM Track") == [{"albumArtId": 2}]
+
+
 def test_a_track_already_in_the_library_is_found_not_added(library, stem_set, tmp_path):
     track_file = str(tmp_path / "Test Track.stem.mp4")
     ni_stem.write(stem_set, track_file)
