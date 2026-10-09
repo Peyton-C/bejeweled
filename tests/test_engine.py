@@ -126,19 +126,21 @@ def test_stems_are_one_eight_channel_track_in_engines_order(stem_set, tmp_path, 
     stream, = ff.probe(ffmpeg, plain)["streams"]
     assert (stream["codec_name"], stream["channels"], stream["sample_rate"]) == ("aac", 8, "44100")
 
-    # Each pair's pitch, from how often it crosses zero in the middle half second
+    # Each channel's pitch, from how often it crosses zero in the middle half second.
+    # Both sides of a pair are checked: looking at the left alone once passed a file
+    # whose bass had the drums on its right.
     raw = subprocess.run([ffmpeg, "-v", "error", "-i", plain, "-f", "s16le", "-"],
                          capture_output=True, check=True).stdout
     samples = memoryview(raw).cast("h")
     frames = len(samples) // 8
     found = []
-    for pair in range(4):
-        channel = samples[pair * 2::8][frames // 4:frames // 4 + 22050]
+    for index in range(8):
+        channel = samples[index::8][frames // 4:frames // 4 + 22050]
         crossings = sum(1 for a, b in zip(channel, channel[1:]) if (a < 0) != (b < 0))
         found.append(crossings)
     tones = dict(zip(NI_SLOTS, (110, 220, 440, 880)))
-    for crossings, slot in zip(found, engine_stem.ENGINE_SLOTS):
-        assert crossings == pytest.approx(tones[slot], rel=0.05)
+    for index, crossings in enumerate(found):
+        assert crossings == pytest.approx(tones[engine_stem.ENGINE_SLOTS[index // 2]], rel=0.05)
 
 
 def test_every_packet_is_padded_and_encrypted(stem_set, tmp_path):

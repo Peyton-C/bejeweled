@@ -63,13 +63,15 @@ def _encode(ffmpeg: str, stems: list[str], out_path: str) -> None:
         cmd += ["-i", path]
     prep = ";".join(f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(len(stems)))
     chain = "".join(f"[s{i}]" for i in range(len(stems)))
-    count = 2 * len(stems)
-    # amerge keeps the inputs in the order given when their layouts overlap, as four
-    # stereo pairs do, and pan then only names the layout without moving anything
-    routing = "|".join(f"c{i}=c{i}" for i in range(count))
+    # Every channel is placed by name. amerge followed by pan used to do this, but
+    # amerge labels its eight channels 7.1 and FFmpeg 9.0.2 then converts by name on
+    # the way into pan: the fourth channel, sitting where 7.1 has LFE, was dropped and
+    # the next two moved down, so bass lost its right side to the drums' left.
+    names = LAYOUT.split("+")
+    routing = "|".join(f"{i // 2}.{i % 2}-{name}" for i, name in enumerate(names))
     cmd += [
         "-filter_complex",
-        f"{prep};{chain}amerge=inputs={len(stems)},pan={LAYOUT}|{routing}[out]",
+        f"{prep};{chain}join=inputs={len(stems)}:channel_layout={LAYOUT}:map={routing}[out]",
         "-map", "[out]", "-map_metadata", "-1",
         "-c:a", "aac", "-b:a", BITRATE, "-ar", str(SAMPLE_RATE),
         # Engine's files are mdat first, and the sample tables are patched in place
