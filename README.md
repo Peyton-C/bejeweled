@@ -29,6 +29,7 @@ bejeweled separate "Song (Atmos).wav"               # a surround or Atmos render
 
 bejeweled convert ./my-stems/        # build a stem file from a folder of stems
 bejeweled convert track.stem.mp4     # give a stem file its Engine DJ stems
+bejeweled convert track.stem.mp4 --format files     # unpack it into separate stems
 
 bejeweled info track.stem.mp4        # show a stem file's metadata
 

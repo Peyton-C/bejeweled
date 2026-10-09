@@ -317,6 +317,31 @@ def test_a_stem_file_is_read_back_as_its_four_stems(stem_set, tmp_path):
         local.from_stem_file(stem_set.stems[0].path, str(tmp_path / "work"))
 
 
+def test_a_stem_file_unpacks_into_a_folder_of_its_stems(stem_set, tmp_path, ffmpeg):
+    from bejeweled.sources import local
+
+    track_file = str(tmp_path / "Test Track.stem.mp4")
+    ni_stem.write(stem_set, track_file)
+
+    written = jobs.stem_file_to_files(track_file)
+
+    assert written.path == str(tmp_path / "Test Track - stems")
+    assert sorted(os.listdir(written.path)) == sorted(f"{slot}.wav" for slot in NI_SLOTS)
+    # The folder is one convert builds a stem file from again
+    assert sorted(local.from_folder(written.path).names()) == sorted(NI_SLOTS)
+
+    # Vocals are the stem file's last track
+    raw = subprocess.run([ffmpeg, "-v", "error", "-i", written.stem_set.require("Vocals").path,
+                          "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    samples = memoryview(raw).cast("h")
+    channel = samples[0::2][len(samples) // 8:len(samples) // 8 + 22050]
+    crossings = sum(1 for a, b in zip(channel, channel[1:]) if (a < 0) != (b < 0))
+    assert crossings == pytest.approx(880, rel=0.05)
+
+    assert jobs.stem_file_to_files(track_file, str(tmp_path / "elsewhere")).path == str(
+        tmp_path / "elsewhere")
+
+
 def test_a_stem_file_gains_engine_stems_where_it_stands(library, stem_set, tmp_path, ffmpeg,
                                                         monkeypatch):
     monkeypatch.setenv("BEJEWELED_ENGINE_KEY", KEY.hex())

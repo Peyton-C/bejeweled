@@ -17,8 +17,8 @@ from .writers import ni_stem
 # take different arguments; outputs are a flag because every writer takes a StemSet.
 FORMATS = jobs.FORMATS
 
-# `files` is what convert starts from, so it is not somewhere it can go
-CONVERT_FORMATS = ("ni-stem", "engine")
+# `files` is what a folder already is, so only a stem file can be converted to it
+CONVERT_FORMATS = FORMATS
 
 
 def _add_output_options(parser, with_format=True):
@@ -77,14 +77,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
     # --- verbs that act on stem files, whatever produced them ---
-    p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems, "
-                                            "or Engine DJ stems from a stem file")
+    p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems, or "
+                                            "Engine DJ stems or separate stems from a "
+                                            "stem file")
     p_conv.add_argument("inputs", nargs="+", metavar="input",
                         help="folders of stems, or .stem.mp4 files")
-    p_conv.add_argument("-o", "--out", help="output .stem.mp4 path, for one folder")
+    p_conv.add_argument("-o", "--out", help="output .stem.mp4 path for one folder, or "
+                                            "the stems folder for one .stem.mp4")
     p_conv.add_argument("--format", choices=CONVERT_FORMATS, default=None,
-                        help="ni-stem, or engine to add it to an Engine DJ library with "
-                             "its stems (default: engine for a .stem.mp4)")
+                        help="ni-stem, engine to add it to an Engine DJ library with its "
+                             "stems, or files to unpack a .stem.mp4 into separate stems "
+                             "(default: engine for a .stem.mp4)")
     p_conv.add_argument("--engine-library",
                         help="the Engine Library folder, for --format engine")
     p_conv.add_argument("--engine-key", help="Engine DJ's stems key, as hex")
@@ -307,10 +310,15 @@ def _convert_one(target, args, cfg) -> int:
     if local.is_stem_file(target):
         if args.format == "ni-stem":
             raise ValueError(f"{os.path.basename(target)} is already a stem file")
+        if args.format == "files":
+            _report(jobs.stem_file_to_files(target, args.out))
+            return 0
         _report(jobs.stem_file_to_engine(target, cfg, engine_library=args.engine_library,
                                          engine_key=args.engine_key), wrote_track=False)
         return 0
 
+    if args.format == "files":
+        raise ValueError(f"{target} is already a folder of stems")
     fmt = args.format or cfg.get("output", {}).get("format")
     engine = jobs.engine_target(fmt if fmt == "engine" else "ni-stem", cfg,
                                 args.engine_library, args.engine_key)

@@ -104,6 +104,21 @@ def stem_file_to_engine(path: str, cfg: dict, *, engine_library: str | None = No
     return Written(path, stem_set, stems)
 
 
+def stem_file_to_files(path: str, out_dir: str | None = None) -> Written:
+    """Unpack an existing NI stem file into a folder of its four stems.
+
+    The folder goes beside the stem file unless `out_dir` names it, under the name a
+    rip gives its own, so `convert` reads it back the same way.
+    """
+    from .sources import local
+
+    path = os.path.abspath(path)
+    base = os.path.basename(path)[:-len(".stem.mp4")]
+    out_dir = os.path.abspath(out_dir) if out_dir else os.path.join(
+        os.path.dirname(path), f"{base} - stems")
+    return Written(out_dir, local.from_stem_file(path, out_dir))
+
+
 # -------------------------------------------------------------------------- festival
 
 def _festival_suffix(cfg: dict, suffix: str | None, no_suffix: bool) -> str | None:

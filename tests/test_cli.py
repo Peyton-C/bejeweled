@@ -116,7 +116,13 @@ def test_convert_takes_stem_files_and_an_engine_library(parser):
                               "--engine-library", "/music/Engine Library"])
     assert (args.inputs, args.format, args.engine_library) == (
         ["a.stem.mp4", "b.stem.mp4"], "engine", "/music/Engine Library")
-    # A stem file can only become Engine stems, so the format is left to the input
+    # Unset, so a stem file becomes Engine stems and a folder a stem file
     assert parser.parse_args(["convert", "a.stem.mp4"]).format is None
-    with pytest.raises(SystemExit):
-        parser.parse_args(["convert", "./stems", "--format", "files"])
+    assert parser.parse_args(["convert", "a.stem.mp4", "--format", "files"]).format == "files"
+
+
+def test_convert_refuses_what_the_input_already_is(tmp_path, capsys):
+    from bejeweled.cli import main
+
+    assert main(["convert", str(tmp_path), "--format", "files"]) == 1
+    assert "already a folder of stems" in capsys.readouterr().err
