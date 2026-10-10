@@ -61,7 +61,12 @@ def _encode(ffmpeg: str, stems: list[str], out_path: str) -> None:
     cmd = [ffmpeg, "-y"]
     for path in stems:
         cmd += ["-i", path]
-    prep = ";".join(f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(len(stems)))
+    # Stems of one song are not always one length, and the vocal of the official
+    # Secret (Shh) stems runs 6 s past the rest. join given that spins for ever, and amerge stops at the shortest,
+    # so each is padded with silence and the output is cut at the longest.
+    longest = max(float(ff.probe(ffmpeg, path)["format"]["duration"]) for path in stems)
+    prep = ";".join(f"[{i}:a]aformat=channel_layouts=stereo,apad[s{i}]"
+                    for i in range(len(stems)))
     chain = "".join(f"[s{i}]" for i in range(len(stems)))
     # Every channel is placed by name. amerge followed by pan used to do this, but
     # amerge labels its eight channels 7.1 and FFmpeg 9.0.2 then converts by name on
@@ -72,7 +77,7 @@ def _encode(ffmpeg: str, stems: list[str], out_path: str) -> None:
     cmd += [
         "-filter_complex",
         f"{prep};{chain}join=inputs={len(stems)}:channel_layout={LAYOUT}:map={routing}[out]",
-        "-map", "[out]", "-map_metadata", "-1",
+        "-map", "[out]", "-map_metadata", "-1", "-t", f"{longest:.6f}",
         "-c:a", "aac", "-b:a", BITRATE, "-ar", str(SAMPLE_RATE),
         # Engine's files are mdat first, and the sample tables are patched in place
         # below, which needs moov after the audio

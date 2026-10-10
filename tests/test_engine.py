@@ -143,6 +143,22 @@ def test_stems_are_one_eight_channel_track_in_engines_order(stem_set, tmp_path, 
         assert crossings == pytest.approx(tones[engine_stem.ENGINE_SLOTS[index // 2]], rel=0.05)
 
 
+def test_stems_of_unequal_length_run_to_the_longest(stem_set, tmp_path, ffmpeg):
+    long = str(tmp_path / "long.wav")
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "sine=frequency=880:duration=2:sample_rate=44100", "-ac", "2", long],
+                   check=True)
+    stems = [Stem(name=s.name, path=long if s.name == "Vocals" else s.path)
+             for s in stem_set.stems]
+    out = str(tmp_path / "1 x.stems")
+    engine_stem.write(StemSet(title="Uneven", stems=stems), out, KEY)
+
+    plain = str(tmp_path / "plain.mp4")
+    engine_stem.decrypt_file(out, plain, KEY)
+    stream, = ff.probe(ffmpeg, plain)["streams"]
+    assert float(stream["duration"]) == pytest.approx(2, abs=0.05)
+
+
 def test_every_packet_is_padded_and_encrypted(stem_set, tmp_path):
     out = str(tmp_path / "enc.stems")
     engine_stem.write(stem_set, out, KEY)
@@ -343,6 +359,24 @@ def test_a_failed_write_leaves_the_library_as_it_was(library, stem_set, tmp_path
     assert _rows(library, "SELECT id FROM Track") == []
     assert _rows(library, "SELECT trackId FROM PerformanceData") == []
     assert not os.path.exists(os.path.join(library.root, "Stems", f"1 {UUID}.stems"))
+    assert os.listdir(os.path.join(library.root, "Stems")) == []
+
+
+def test_jobs_side_by_side_each_add_their_track(library, stem_set, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    tracks = [str(tmp_path / f"Track {n}.stem.mp4") for n in range(4)]
+    for track in tracks:
+        ni_stem.write(stem_set, track)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        stems = list(pool.map(
+            lambda track: jobs.write_engine(stem_set, track, (library, KEY), None), tracks))
+
+    assert len(_rows(library, "SELECT id FROM Track")) == 4
+    assert sorted(os.listdir(os.path.join(library.root, "Stems"))) == sorted(
+        os.path.basename(path) for path in stems)
+    assert len(set(stems)) == 4
 
 
 def test_the_job_adds_the_track_and_writes_its_stems(library, stem_set, tmp_path):

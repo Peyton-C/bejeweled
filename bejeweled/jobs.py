@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import uuid
 from dataclasses import dataclass
 
 from . import __version__, config
@@ -73,6 +75,10 @@ def engine_target(fmt: str, cfg: dict, library: str | None, key: str | None):
     return target, engine.find_key(key, cfg)
 
 
+# One writer at a time on a library, however many jobs are encoding for it
+_library_lock = threading.Lock()
+
+
 def write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
     """Add the stem file to the library as a track, and write its stems beside it.
 
@@ -80,9 +86,21 @@ def write_engine(stem_set: StemSet, track_path: str, target, merge) -> str:
     so the two cannot drift apart. The row and the stems go in together or not at all.
     """
     library, key = target
-    with library.writing() as db:
-        track = library.register(db, track_path, stem_set)
-        return engine_stem.write(stem_set, library.stems_path(track), key, merge=merge)
+    # Encoded before the database is touched and under a name Engine never looks for.
+    # The encode is all of the time, 11 s of one core for a four minute song, so jobs
+    # run side by side spend it in parallel and hold the database only to add a row
+    # and rename a file.
+    pending = os.path.join(library.root, "Stems", f".{uuid.uuid4().hex}.pending")
+    try:
+        engine_stem.write(stem_set, pending, key, merge=merge)
+        with _library_lock, library.writing() as db:
+            track = library.register(db, track_path, stem_set)
+            final = library.stems_path(track)
+            os.replace(pending, final)
+            return final
+    finally:
+        if os.path.exists(pending):
+            os.remove(pending)
 
 
 def stem_file_to_engine(path: str, cfg: dict, *, engine_library: str | None = None,

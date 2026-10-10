@@ -92,6 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="the Engine Library folder, for --format engine")
     p_conv.add_argument("--engine-key", help="Engine DJ's stems key, as hex")
     p_conv.add_argument("--codec", help="aac, alac, flac, opus or wav")
+    p_conv.add_argument("-j", "--jobs", type=int,
+                        help="how many inputs to convert at once (default: one per core)")
     p_conv.add_argument("--palette", help="palette name, or 4 comma-separated hex colours")
     p_conv.add_argument("--suffix", help="appended to the title, e.g. '(ENGINE)'")
     p_conv.add_argument("--no-suffix", action="store_true", help="never append a suffix")
@@ -282,40 +284,55 @@ def _list(args) -> int:
 def _convert(args) -> int:
     if args.out and len(args.inputs) > 1:
         raise ValueError("-o names one output, so it takes one input")
+    if args.jobs is not None and args.jobs < 1:
+        raise ValueError("--jobs is at least 1")
 
     cfg = config.load()
     if len(args.inputs) == 1:
-        return _convert_one(args.inputs[0], args, cfg)
+        _report(*_convert_one(args.inputs[0], args, cfg))
+        return 0
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # The work is FFmpeg's and its AAC encoder keeps to one core, so a core each.
+    # Eight side by side finished in 14 s where one took 11.
+    workers = min(args.jobs or os.cpu_count() or 1, len(args.inputs))
     # As with separate, a batch carries on past a bad one
     failed = []
-    for number, target in enumerate(args.inputs, 1):
-        print(f"[{number}/{len(args.inputs)}] {os.path.basename(os.path.normpath(target))}")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        running = {pool.submit(_convert_one, target, args, cfg): target
+                   for target in args.inputs}
         try:
-            _convert_one(target, args, cfg)
-        except (FFmpegError, ValueError, RuntimeError, FileNotFoundError) as e:
-            print(f"  error: {e}", file=sys.stderr)
-            failed.append(target)
+            for number, done in enumerate(as_completed(running), 1):
+                target = running[done]
+                print(f"[{number}/{len(args.inputs)}] {os.path.basename(os.path.normpath(target))}")
+                try:
+                    _report(*done.result())
+                except (FFmpegError, ValueError, RuntimeError, FileNotFoundError) as e:
+                    print(f"  error: {e}", file=sys.stderr)
+                    failed.append(target)
+        except BaseException:
+            pool.shutdown(cancel_futures=True)
+            raise
     if failed:
         print(f"\n{len(failed)} of {len(args.inputs)} failed:", file=sys.stderr)
-        for target in failed:
+        for target in sorted(failed, key=args.inputs.index):
             print(f"  {target}", file=sys.stderr)
         return 1
     return 0
 
 
-def _convert_one(target, args, cfg) -> int:
+def _convert_one(target, args, cfg):
+    """Convert one input, returning what was written and whether the track itself was."""
     from .sources import local
 
     if local.is_stem_file(target):
         if args.format == "ni-stem":
             raise ValueError(f"{os.path.basename(target)} is already a stem file")
         if args.format == "files":
-            _report(jobs.stem_file_to_files(target, args.out))
-            return 0
-        _report(jobs.stem_file_to_engine(target, cfg, engine_library=args.engine_library,
-                                         engine_key=args.engine_key), wrote_track=False)
-        return 0
+            return jobs.stem_file_to_files(target, args.out), True
+        return jobs.stem_file_to_engine(target, cfg, engine_library=args.engine_library,
+                                        engine_key=args.engine_key), False
 
     if args.format == "files":
         raise ValueError(f"{target} is already a folder of stems")
@@ -343,8 +360,7 @@ def _convert_one(target, args, cfg) -> int:
         colors=_colors(args, cfg),
     )
     stems = engine and jobs.write_engine(stem_set, out_path, engine, merge)
-    _report(jobs.Written(out_path, stem_set, stems))
-    return 0
+    return jobs.Written(out_path, stem_set, stems), True
 
 
 def _recolor(args) -> int:

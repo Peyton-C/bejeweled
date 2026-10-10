@@ -34,6 +34,8 @@ These stems are decoded from the stem file and encoded again, so from an AAC ste
 
 `convert` on a folder of stems takes `--format engine` too.
 
+Given several inputs, `convert` works on one per core at once. Pass `--jobs` to change that.
+
 ## Stems
 Engine has the same four stems as the Native Instruments format in a different order, so a source with more parts is folded the same way.
 
