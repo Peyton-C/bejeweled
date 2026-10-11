@@ -197,6 +197,7 @@ def read_tags(info: dict) -> dict:
         "year": match.group(0) if match else None,
         "bpm": bpm or None,
         "key": first("initialkey", "tkey", "key"),
+        "genre": first("genre"),
         "layout": _tagged_layout(first("comment")),
     }
 
@@ -332,6 +333,7 @@ def separate(path: str, work_dir: str, layout: str | None = None,
         year=tags["year"],
         bpm=tags["bpm"],
         key=tags["key"],
+        genre=tags["genre"],
         cover=_extract_cover(ffmpeg, path, info, work_dir),
         stems=stems,
         master=master,

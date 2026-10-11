@@ -39,6 +39,8 @@ bejeweled festival rip "Kill Bill" --format files   # separate stems, no contain
 bejeweled festival rip "Kill Bill" --no-suffix      # drop the title marker
 ```
 
+`bejeweled mcp` runs it as an MCP server, so an agent can search Festival, download tracks and separate songs. See [MCP server](docs/mcp.md).
+
 Each source is its own subcommand, so `bejeweled festival --help` lists what Festival takes. Settings that would otherwise be typed every time live in a config file, written with `bejeweled config --init`.
 
 ## Sources and formats
@@ -48,6 +50,7 @@ Each source is its own subcommand, so `bejeweled festival --help` lists what Fes
 | [Separation](docs/separate.md) | Splitting any song with RoFormer or demucs, including 5.1 and Dolby Atmos renders |
 | [Fortnite Festival](docs/festival.md) | Ripping tracks, the metadata Festival provides, and the count-in it puts on every song |
 | [Native Instruments stems](docs/ni.md) | What a `.stem.mp4` contains, which codecs work where, and what bejeweled writes inside it |
+| [MCP server](docs/mcp.md) | Running bejeweled as a server for an agent, and the tools it offers |
 
 ## Colours
 

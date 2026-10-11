@@ -113,11 +113,12 @@ def test_tags_are_read_across_containers():
     info = {
         "streams": [{"codec_type": "audio", "tags": {"TITLE": "Stream Title"}}],
         "format": {"tags": {"title": "Déjà Vu", "ARTIST": "Beyoncé",
-                            "date": "2006-09-01", "TBPM": "105", "initialkey": "Bbm"}},
+                            "date": "2006-09-01", "TBPM": "105", "initialkey": "Bbm",
+                            "GENRE": "R&B/Soul"}},
     }
     assert sep.read_tags(info) == {
         "title": "Déjà Vu", "artist": "Beyoncé", "album": None,
-        "year": "2006", "bpm": 105.0, "key": "Bbm", "layout": None,
+        "year": "2006", "bpm": 105.0, "key": "Bbm", "genre": "R&B/Soul", "layout": None,
     }
 
 
