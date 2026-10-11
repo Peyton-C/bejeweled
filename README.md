@@ -1,5 +1,5 @@
 # bejeweled
-A Stem multi-tool for creating Native Instruments stem files.
+A Stem multi-tool for creating Native Instruments and Engine DJ stem files.
 
 Designed for use with Mixxx 2.6, but it should be compatible with Traktor and other DJ software that supports the Native Instruments format.
 
@@ -28,6 +28,8 @@ bejeweled separate "Song.flac"                      # split any song into stems
 bejeweled separate "Song (Atmos).wav"               # a surround or Atmos render
 
 bejeweled convert ./my-stems/        # build a stem file from a folder of stems
+bejeweled convert track.stem.mp4     # give a stem file its Engine DJ stems
+bejeweled convert track.stem.mp4 --format files     # unpack it into separate stems
 
 bejeweled info track.stem.mp4        # show a stem file's metadata
 
@@ -36,6 +38,7 @@ bejeweled festival list "chappell roan"
 
 bejeweled festival rip "Kill Bill"                  # -> Kill Bill (FN).stem.mp4
 bejeweled festival rip "Kill Bill" --format files   # separate stems, no container
+bejeweled festival rip "Kill Bill" --format engine  # also into an Engine DJ library
 bejeweled festival rip "Kill Bill" --no-suffix      # drop the title marker
 ```
 
@@ -50,6 +53,7 @@ Each source is its own subcommand, so `bejeweled festival --help` lists what Fes
 | [Separation](docs/separate.md) | Splitting any song with RoFormer or demucs, including 5.1 and Dolby Atmos renders |
 | [Fortnite Festival](docs/festival.md) | Ripping tracks, the metadata Festival provides, and the count-in it puts on every song |
 | [Native Instruments stems](docs/ni.md) | What a `.stem.mp4` contains, which codecs work where, and what bejeweled writes inside it |
+| [Engine DJ](docs/engine.md) | Adding a song to an Engine DJ library with its stems, and what a `.stems` file contains |
 | [MCP server](docs/mcp.md) | Running bejeweled as a server for an agent, and the tools it offers |
 
 ## Colours

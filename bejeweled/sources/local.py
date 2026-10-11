@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import os
 
-from ..stems import Stem, StemSet
+from .. import ffmpeg as ff
+from ..stems import NI_SLOTS, Stem, StemSet
 
 AUDIO_EXTENSIONS = (".wav", ".wv", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".opus", ".ogg")
 
@@ -64,4 +65,44 @@ def from_folder(folder: str, title: str | None = None, artist: str | None = None
         artist=artist,
         stems=stems,
         master=master,
+    )
+
+
+def is_stem_file(path: str) -> bool:
+    return path.lower().endswith(".stem.mp4") and os.path.isfile(path)
+
+
+def from_stem_file(path: str, work_dir: str, ffmpeg: str | None = None) -> StemSet:
+    """Build a StemSet from an NI stem file, unpacking its four stems into `work_dir`.
+
+    The stems are named by position, not by what the file calls them: the format fixes
+    which slot each track is, and a file from another tool may label its Other
+    "Synths".
+    """
+    ffmpeg = ff.find_ffmpeg(ffmpeg)
+    info = ff.probe(ffmpeg, path)
+    audio = [s for s in info["streams"] if s.get("codec_type") == "audio"]
+    if len(audio) != 1 + len(NI_SLOTS):
+        raise ValueError(f"{path}: not a stem file, it has {len(audio)} audio tracks "
+                         f"where a stem file has {1 + len(NI_SLOTS)}")
+
+    from .separate import read_tags
+
+    os.makedirs(work_dir, exist_ok=True)
+    cmd, stems = [ffmpeg, "-y", "-i", path], []
+    for number, slot in enumerate(NI_SLOTS, 1):
+        out = os.path.join(work_dir, f"{slot}.wav")
+        # Float, so a lossy stem that decodes a little over full scale is not clipped
+        # on its way to being encoded again
+        cmd += ["-map", f"0:a:{number}", "-c:a", "pcm_f32le", out]
+        stems.append(out)
+    ff.run(cmd)
+
+    tags = read_tags(info)
+    comment = (info.get("format", {}).get("tags") or {}).get("comment")
+    return StemSet(
+        title=tags["title"] or os.path.basename(path)[:-len(".stem.mp4")],
+        stems=[Stem(name=slot, path=out) for slot, out in zip(NI_SLOTS, stems)],
+        master=path, artist=tags["artist"], album=tags["album"], year=tags["year"],
+        bpm=tags["bpm"], key=tags["key"], genre=tags["genre"], comment=comment,
     )

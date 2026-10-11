@@ -40,6 +40,17 @@ Stems bejeweled separated itself are marked too, `(RF)`, `(DE)` and their varian
 
 Stems you supplied yourself are not marked, you already know what they are, but you can ask for one with `--suffix` if you want the origin recorded anyway.
 
+## Separate stems
+`bejeweled convert` unpacks a `.stem.mp4` back into its four stems, whichever tool made it.
+
+```sh
+bejeweled convert track.stem.mp4 --format files
+```
+
+bejeweled writes them as 32-bit float WAV into a folder beside the stem file, or the one `-o` names. The mixdown is not unpacked.
+
+Stems from an AAC or Opus stem file have already been compressed, and writing them as WAV does not undo that.
+
 ## Inside the file
 The format is thinly documented, so these are findings from reading real stem files.
 

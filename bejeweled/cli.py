@@ -15,7 +15,10 @@ from .writers import ni_stem
 
 # What a rip is written as. Sources are scoped to their own subcommand because they
 # take different arguments; outputs are a flag because every writer takes a StemSet.
-FORMATS = ("ni-stem", "files")
+FORMATS = jobs.FORMATS
+
+# `files` is what a folder already is, so only a stem file can be converted to it
+CONVERT_FORMATS = FORMATS
 
 
 def _add_output_options(parser, with_format=True):
@@ -26,7 +29,11 @@ def _add_output_options(parser, with_format=True):
                         help="palette name, or 4 comma-separated hex colours")
     if with_format:
         parser.add_argument("--format", choices=FORMATS, default=None,
-                            help="ni-stem (a .stem.mp4) or files (separate stems)")
+                            help="ni-stem (a .stem.mp4), engine (a .stem.mp4 added to an "
+                                 "Engine DJ library with its stems) or files (separate stems)")
+        parser.add_argument("--engine-library",
+                            help="the Engine Library folder, for --format engine")
+        parser.add_argument("--engine-key", help="Engine DJ's stems key, as hex")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,10 +77,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
     # --- verbs that act on stem files, whatever produced them ---
-    p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems")
-    p_conv.add_argument("folder")
-    p_conv.add_argument("-o", "--out", help="output .stem.mp4 path")
+    p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems, or "
+                                            "Engine DJ stems or separate stems from a "
+                                            "stem file")
+    p_conv.add_argument("inputs", nargs="+", metavar="input",
+                        help="folders of stems, or .stem.mp4 files")
+    p_conv.add_argument("-o", "--out", help="output .stem.mp4 path for one folder, or "
+                                            "the stems folder for one .stem.mp4")
+    p_conv.add_argument("--format", choices=CONVERT_FORMATS, default=None,
+                        help="ni-stem, engine to add it to an Engine DJ library with its "
+                             "stems, or files to unpack a .stem.mp4 into separate stems "
+                             "(default: engine for a .stem.mp4)")
+    p_conv.add_argument("--engine-library",
+                        help="the Engine Library folder, for --format engine")
+    p_conv.add_argument("--engine-key", help="Engine DJ's stems key, as hex")
     p_conv.add_argument("--codec", help="aac, alac, flac, opus or wav")
+    p_conv.add_argument("-j", "--jobs", type=int,
+                        help="how many inputs to convert at once (default: one per core)")
     p_conv.add_argument("--palette", help="palette name, or 4 comma-separated hex colours")
     p_conv.add_argument("--suffix", help="appended to the title, e.g. '(ENGINE)'")
     p_conv.add_argument("--no-suffix", action="store_true", help="never append a suffix")
@@ -151,7 +171,8 @@ def _rip(args) -> int:
     written = jobs.rip_festival(
         track, args.out, cfg, keys=args.keys, suffix=args.suffix, no_suffix=args.no_suffix,
         cover=not args.no_cover, trim_countin=not args.keep_countin, fmt=args.format,
-        codec=args.codec, palette=args.palette, progress=progress,
+        codec=args.codec, palette=args.palette, engine_library=args.engine_library,
+        engine_key=args.engine_key, progress=progress,
     )
     print()
 
@@ -172,11 +193,13 @@ def _rip(args) -> int:
     return 0
 
 
-def _report(written) -> None:
+def _report(written, wrote_track=True) -> None:
     if os.path.isdir(written.path):
         print(f"wrote {len(written.stem_set.stems)} stems to {written.path}")
-    else:
+    elif wrote_track:
         print(f"wrote {written.path}")
+    if written.engine_stems:
+        print(f"wrote {written.engine_stems}")
 
 
 def _separate(args) -> int:
@@ -234,7 +257,8 @@ def _separate_one(path, args, cfg) -> int:
     written = jobs.separate_file(
         path, args.out, cfg, separator=args.separator, layout=args.layout,
         model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
-        fmt=args.format, codec=args.codec, palette=args.palette, progress=progress,
+        fmt=args.format, codec=args.codec, palette=args.palette,
+        engine_library=args.engine_library, engine_key=args.engine_key, progress=progress,
     )
     print()
 
@@ -258,10 +282,64 @@ def _list(args) -> int:
 
 
 def _convert(args) -> int:
-    from .sources import local
+    if args.out and len(args.inputs) > 1:
+        raise ValueError("-o names one output, so it takes one input")
+    if args.jobs is not None and args.jobs < 1:
+        raise ValueError("--jobs is at least 1")
 
     cfg = config.load()
-    stem_set = local.from_folder(args.folder)
+    if len(args.inputs) == 1:
+        _report(*_convert_one(args.inputs[0], args, cfg))
+        return 0
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # The work is FFmpeg's and its AAC encoder keeps to one core, so a core each.
+    # Eight side by side finished in 14 s where one took 11.
+    workers = min(args.jobs or os.cpu_count() or 1, len(args.inputs))
+    # As with separate, a batch carries on past a bad one
+    failed = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        running = {pool.submit(_convert_one, target, args, cfg): target
+                   for target in args.inputs}
+        try:
+            for number, done in enumerate(as_completed(running), 1):
+                target = running[done]
+                print(f"[{number}/{len(args.inputs)}] {os.path.basename(os.path.normpath(target))}")
+                try:
+                    _report(*done.result())
+                except (FFmpegError, ValueError, RuntimeError, FileNotFoundError) as e:
+                    print(f"  error: {e}", file=sys.stderr)
+                    failed.append(target)
+        except BaseException:
+            pool.shutdown(cancel_futures=True)
+            raise
+    if failed:
+        print(f"\n{len(failed)} of {len(args.inputs)} failed:", file=sys.stderr)
+        for target in sorted(failed, key=args.inputs.index):
+            print(f"  {target}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _convert_one(target, args, cfg):
+    """Convert one input, returning what was written and whether the track itself was."""
+    from .sources import local
+
+    if local.is_stem_file(target):
+        if args.format == "ni-stem":
+            raise ValueError(f"{os.path.basename(target)} is already a stem file")
+        if args.format == "files":
+            return jobs.stem_file_to_files(target, args.out), True
+        return jobs.stem_file_to_engine(target, cfg, engine_library=args.engine_library,
+                                        engine_key=args.engine_key), False
+
+    if args.format == "files":
+        raise ValueError(f"{target} is already a folder of stems")
+    fmt = args.format or cfg.get("output", {}).get("format")
+    engine = jobs.engine_target(fmt if fmt == "engine" else "ni-stem", cfg,
+                                args.engine_library, args.engine_key)
+    stem_set = local.from_folder(target)
 
     suffix = None if args.no_suffix else (args.suffix or _source_suffix(local, cfg))
     if suffix:
@@ -270,7 +348,7 @@ def _convert(args) -> int:
         stem_set.comment = stem_set.describe_source(__version__)
 
     out_path = args.out or os.path.join(
-        os.path.dirname(os.path.normpath(args.folder)) or ".",
+        os.path.dirname(os.path.normpath(target)) or ".",
         f"{jobs.safe(stem_set.title)}.stem.mp4",
     )
     merge = {"Lead": "Other"} if stem_set.get("Lead") else None
@@ -281,8 +359,8 @@ def _convert(args) -> int:
         merge=merge,
         colors=_colors(args, cfg),
     )
-    print(f"wrote {out_path}")
-    return 0
+    stems = engine and jobs.write_engine(stem_set, out_path, engine, merge)
+    return jobs.Written(out_path, stem_set, stems), True
 
 
 def _recolor(args) -> int:

@@ -43,11 +43,21 @@ def test_output_format_is_a_flag_with_a_closed_set(parser):
     ).format == "ni-stem"
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["festival", "rip", "x", "--format", "engine"])
+        parser.parse_args(["festival", "rip", "x", "--format", "serato"])
 
 
-def test_formats_are_the_two_intended_outputs():
-    assert set(FORMATS) == {"ni-stem", "files"}
+def test_formats_are_the_three_intended_outputs():
+    assert set(FORMATS) == {"ni-stem", "engine", "files"}
+
+
+def test_engine_takes_its_library_and_key_from_either_source(parser):
+    args = parser.parse_args(["festival", "rip", "x", "--format", "engine",
+                              "--engine-library", "/music/Engine Library"])
+    assert (args.format, args.engine_library, args.engine_key) == (
+        "engine", "/music/Engine Library", None)
+    assert parser.parse_args(
+        ["separate", "a.wav", "--format", "engine", "--engine-key", "00" * 16]
+    ).engine_key == "00" * 16
 
 
 def test_separate_takes_a_file_and_the_shared_output_options(parser):
@@ -79,7 +89,7 @@ def test_stem_file_verbs_stay_top_level(parser):
     assert parser.parse_args(["info", "a.stem.mp4"]).files == ["a.stem.mp4"]
     assert parser.parse_args(["recolor", "a.stem.mp4", "--palette", "vivid-dark"]).files
     assert parser.parse_args(["palette"]).name is None
-    assert parser.parse_args(["convert", "./stems"]).folder == "./stems"
+    assert parser.parse_args(["convert", "./stems"]).inputs == ["./stems"]
 
 
 def test_recolor_requires_a_palette(parser):
@@ -99,3 +109,20 @@ def test_festival_rip_options(parser):
     assert args.suffix == "(FN)"
     assert args.keep_countin
     assert args.no_cover
+
+
+def test_convert_takes_stem_files_and_an_engine_library(parser):
+    args = parser.parse_args(["convert", "a.stem.mp4", "b.stem.mp4", "--format", "engine",
+                              "--engine-library", "/music/Engine Library"])
+    assert (args.inputs, args.format, args.engine_library) == (
+        ["a.stem.mp4", "b.stem.mp4"], "engine", "/music/Engine Library")
+    # Unset, so a stem file becomes Engine stems and a folder a stem file
+    assert parser.parse_args(["convert", "a.stem.mp4"]).format is None
+    assert parser.parse_args(["convert", "a.stem.mp4", "--format", "files"]).format == "files"
+
+
+def test_convert_refuses_what_the_input_already_is(tmp_path, capsys):
+    from bejeweled.cli import main
+
+    assert main(["convert", str(tmp_path), "--format", "files"]) == 1
+    assert "already a folder of stems" in capsys.readouterr().err
