@@ -72,6 +72,11 @@ separator = "roformer"
 # title_suffix here replaces them all.
 mark_titles = true
 
+[combine]
+# Mark grafted titles, since part of the vocal is a separation. The separator's
+# letters follow a plus, and join a marker the stems already had: (+RF), (FN +RF).
+mark_titles = true
+
 [engine]
 # The folder named Engine Library, for format = "engine". Quit Engine DJ before
 # writing to it.

@@ -28,6 +28,11 @@ demucs. The input follows: `(RF)` from stereo, `(RF SR)` from surround, `(RF AT)
 Atmos. A marker names the input, never the output, and avoids wording that suggests
 generative AI.
 
+A graft is mostly real stems with separated audio added, so its marker is the
+separator's letters after a plus, joined to any marker the stems already carried:
+`(+RF)`, or `(FN +RF)` for Festival stems. The plus keeps it apart from a full
+separation of the same song.
+
 ## What goes where
 
 `README.md` is what a user needs to get in and pointed the right way, nothing more. It
@@ -110,7 +115,7 @@ source slots in without touching the rest.
 sources/           StemSet            writers/
   festival.py  ->  title, stems,  ->    ni_stem.py      .stem.mp4
   local.py         master, tags         engine_stem.py  .stems
-                                        (or no writer: --format files)
+  combine.py                            (or no writer: --format files)
 ```
 
 The two axes are deliberately asymmetric. Sources keep multiplying, and each arrives
@@ -118,6 +123,11 @@ with its own arguments, so each gets its own subcommand. Outputs do not multiply
 stems, NI stems added to an Engine DJ library, or the raw stems with no container. That
 is the whole list, which is why a flag suffices. Do not add an output format without
 asking.
+
+`combine.py` is the one source that reads other sources: it takes a `StemSet` from one
+version of a song and audio from another, and returns a new set. It is also the only
+module that needs numpy, lining two versions up to the sample being out of FFmpeg's
+reach.
 
 `engine` is the one output that is not a file on its own. Engine's stems are a sidecar
 to a track in a library, so `engine.py` owns the library and its database while

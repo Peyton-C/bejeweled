@@ -126,3 +126,15 @@ def test_convert_refuses_what_the_input_already_is(tmp_path, capsys):
 
     assert main(["convert", str(tmp_path), "--format", "files"]) == 1
     assert "already a folder of stems" in capsys.readouterr().err
+
+
+def test_combine_scopes_its_actions_like_a_source(parser):
+    args = parser.parse_args(["combine", "graft", "clean.stem.mp4", "explicit.flac",
+                              "--title", "Song", "--separator", "hybrid"])
+    assert (args.command, args.action) == ("combine", "graft")
+    assert (args.stems, args.mix, args.title, args.separator) == (
+        "clean.stem.mp4", "explicit.flac", "Song", "hybrid")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["combine"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["combine", "graft", "clean.stem.mp4"])

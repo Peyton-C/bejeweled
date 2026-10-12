@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 
 from . import __version__, config
-from .stems import StemSet
+from .stems import Stem, StemSet
 from .writers import engine_stem, ni_stem
 
 FORMATS = ("ni-stem", "engine", "files")
@@ -282,3 +282,106 @@ def separate_file(path: str, out_dir: str, cfg: dict, *, separator: str | None =
     if not os.listdir(work):
         os.rmdir(work)
     return Written(out_path, stem_set, stems)
+
+
+# --------------------------------------------------------------------------- combine
+
+def graft_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | None = None,
+               separator: str | None = None, model: str | None = None,
+               device: str | None = None, suffix: str | None = None,
+               no_suffix: bool = False, fmt: str | None = None, codec: str | None = None,
+               palette: str | None = None, engine_library: str | None = None,
+               engine_key: str | None = None, progress=None) -> Written:
+    """Graft the vocal of an explicit mix into real stems of its clean edit.
+
+    `stems` is a stem file or a folder of stems, and is never written to. The mix is
+    separated only for its vocal, and only the stretches that differ are used.
+    """
+    import shutil
+
+    from . import demucs as dm
+    from . import ffmpeg as ff
+    from .sources import combine, local, separate
+
+    fmt = _format(fmt, cfg)
+    target = engine_target(fmt, cfg, engine_library, engine_key)
+    sep_cfg = cfg.get("separate", {})
+    separator = _separator(separator, cfg)
+    out_dir = os.path.abspath(out_dir)
+    if not os.path.isfile(mix):
+        raise FileNotFoundError(f"no such file: {mix}")
+
+    ffmpeg = ff.find_ffmpeg()
+    mix_title = separate.read_tags(ff.probe(ffmpeg, mix))["title"]
+    stems = os.path.abspath(stems)
+    # Named after the stems rather than the mix, whose file name is whatever it was
+    # downloaded as
+    base = (os.path.basename(stems)[:-len(".stem.mp4")] if local.is_stem_file(stems)
+            else os.path.basename(stems))
+    work = os.path.join(out_dir, f"{safe(base)} - grafted")
+    donor_dir = os.path.join(work, ".donor")
+
+    cover = None
+    try:
+        if local.is_stem_file(stems):
+            clean = local.from_stem_file(stems, work, ffmpeg)
+            cover = separate._extract_cover(ffmpeg, stems, ff.probe(ffmpeg, stems), work)
+            clean.cover = cover
+            unpacked = [s.path for s in clean.stems]
+        else:
+            clean = local.from_folder(stems)
+            unpacked = []
+        clean.require(combine.GRAFT_STEM)
+
+        donor = separate.separate(
+            mix, donor_dir, separator=separator,
+            model=model or sep_cfg.get("model"),
+            device=device or sep_cfg.get("device") or dm.default_device(),
+            progress=progress,
+        )
+        stem_set = combine.graft(clean, donor.require(combine.GRAFT_STEM).path, work,
+                                 ffmpeg=ffmpeg)
+        if not stem_set.extra["graft"].windows:
+            # Better nothing than a file marked as grafted that is only the stems
+            raise ValueError("the two versions differ nowhere bejeweled can hear, "
+                             "so there is nothing to graft")
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+    shutil.rmtree(donor_dir, ignore_errors=True)
+
+    marker = None if no_suffix else suffix or config.title_suffix(
+        combine.SOURCE_NAME, combine.title_marker(separator),
+        combine.MARK_TITLES_BY_DEFAULT, cfg)
+    named = title or mix_title
+    stem_set.title = (combine.mark_title(named, marker, carry_from=clean.title) if named
+                      else combine.mark_title(clean.title, marker))
+    report = stem_set.extra["graft"]
+    stem_set.source = (f"{report.stem.lower()} grafted in {len(report.windows)} places "
+                       f"from {donor.source}")
+    if cfg.get("metadata", {}).get("write_comment", True):
+        stem_set.comment = stem_set.describe_source(__version__)
+
+    grafted = stem_set.require(report.stem).path
+    if fmt == "files":
+        # A folder of stems is read in place, so the ones left alone are copied in
+        # beside the grafted one to make the folder whole
+        for index, stem in enumerate(stem_set.stems):
+            if os.path.dirname(stem.path) != work:
+                copy = os.path.join(work, os.path.basename(stem.path))
+                shutil.copy2(stem.path, copy)
+                stem_set.stems[index] = Stem(stem.name, copy, stem.color)
+        return Written(work, stem_set)
+
+    merge = {"Lead": "Other"} if stem_set.get("Lead") else None
+    out_path = _write_ni(stem_set, out_dir, cfg, merge, codec, palette)
+    engine_stems = target and write_engine(stem_set, out_path, target, merge)
+    written = unpacked + [grafted, cover]
+    if stem_set.master != clean.master:
+        written.append(stem_set.master)
+    for leftover in written:
+        if leftover and os.path.exists(leftover):
+            os.remove(leftover)
+    if not os.listdir(work):
+        os.rmdir(work)
+    return Written(out_path, stem_set, engine_stems)

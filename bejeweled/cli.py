@@ -76,6 +76,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_sep.add_argument("--suffix", help="appended to the title instead of a marker such as '(RF)'")
     p_sep.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
+    p_comb = sub.add_parser("combine", help="build stems from more than one version of a song")
+    comb = p_comb.add_subparsers(dest="action", required=True)
+
+    c_graft = comb.add_parser("graft", help="put the explicit vocal into real stems of "
+                                            "the clean edit")
+    c_graft.add_argument("stems", help="a .stem.mp4 or a folder of stems, of the clean edit")
+    c_graft.add_argument("mix", help="the explicit release, as an ordinary mixed song")
+    _add_output_options(c_graft)
+    c_graft.add_argument("--title", help="the title to give the result (default: the "
+                                         "mix's title tag, or the stems' title)")
+    c_graft.add_argument("--separator", choices=list(SEPARATORS),
+                         help=f"what separates the mix (default: {DEFAULT_SEPARATOR})")
+    c_graft.add_argument("--model", help="demucs model, for demucs and the hybrid")
+    c_graft.add_argument("--device", help="demucs's device: cpu, cuda or mps")
+    c_graft.add_argument("--suffix", help="appended to the title instead of a marker "
+                                          "such as '(+RF)'")
+    c_graft.add_argument("--no-suffix", action="store_true", help="never append a suffix")
+
     # --- verbs that act on stem files, whatever produced them ---
     p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems, or "
                                             "Engine DJ stems or separate stems from a "
@@ -124,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "festival":
         handler = {"rip": _rip, "list": _list}[args.action]
+    elif args.command == "combine":
+        handler = {"graft": _graft}[args.action]
     else:
         handler = {
             "separate": _separate, "convert": _convert, "recolor": _recolor,
@@ -266,6 +286,44 @@ def _separate_one(path, args, cfg) -> int:
     groups = written.stem_set.extra["groups"]
     if len(groups) > 1:
         print(f"  read as {layout}, separated in {len(groups)} groups: {', '.join(groups)}")
+
+    _report(written)
+    return 0
+
+
+def _clock(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{seconds % 60:04.1f}"
+
+
+def _graft(args) -> int:
+    cfg = config.load()
+    last = [None]
+
+    def progress(done, total, stage="separating"):
+        if not total:
+            return
+        percent = done * 100 // total
+        if (stage, percent) != last[0]:
+            if last[0] and last[0][0] != stage:
+                print()
+            last[0] = (stage, percent)
+            print(f"\r  {stage} {percent}%", end="", flush=True)
+
+    written = jobs.graft_file(
+        args.stems, args.mix, args.out, cfg, title=args.title, separator=args.separator,
+        model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
+        fmt=args.format, codec=args.codec, palette=args.palette,
+        engine_library=args.engine_library, engine_key=args.engine_key, progress=progress,
+    )
+    print()
+
+    report = written.stem_set.extra["graft"]
+    print(f"  grafted {len(report.windows)} places, {report.seconds:.1f}s of "
+          f"{report.stem.lower()}: {' '.join(_clock(w.start) for w in report.windows)}")
+    if report.only_clean:
+        # Printed because nothing was done there, and it may be an edit worth checking
+        print(f"  left alone, only in the stems: "
+              f"{' '.join(_clock(w.start) for w in report.only_clean)}")
 
     _report(written)
     return 0
