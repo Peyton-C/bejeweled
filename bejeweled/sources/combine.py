@@ -10,18 +10,33 @@ The two are compared rather than nulled against each other. Festival's vocal and
 separation of the retail master correlate at only 0.39 as waveforms, since they are
 different mixes of the same performance, but their spectra agree within a few dB
 wherever the words are the same.
+
+Assembling is for a song with no real stems at all, only some of its mix, its
+instrumental and its acapella. Each part given is one thing less the separator has to
+pull out: an acapella is the vocal stem as it stands, an instrumental is separated with
+no voice in it to bleed, and a part taken out of the mix leaves the other part behind.
+The parts are treated the way separate treats the groups of a surround mix, each
+separated on its own and each stem summed back across them.
+
+Say So, with Festival's mixdown as the mix and its stems summed into the parts, scored
+13.5, 19.3, 6.9 and 10.7 dB SDR on drums, bass, other and vocals separated by demucs
+alone, and 16.9, 21.5, 13.4 and 18.5 with the instrumental beside it. Those parts fit
+their mix better than separately mastered releases will.
 """
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, replace
 
 import numpy as np
 
+from .. import demucs as dm
 from .. import ffmpeg as ff
 from ..stems import Stem, StemSet
+from . import separate as sep
 from .separate import DEFAULT_SEPARATOR, SEPARATOR_CODES
 
 # The stems are mostly real, but the grafted stretches are a separation and the whole
@@ -86,6 +101,46 @@ POST_SECONDS = 0.12
 # Short, because the two stems are not phase-aligned and a long crossfade between them
 # combs
 FADE_SECONDS = 0.015
+
+# What an assembly can be given, the mix first since everything is lined up to it
+PARTS = ("mix", "instrumental", "acapella")
+
+# An assembly is a separation with fewer unknowns, so it is marked as one, with letters
+# for the parts that stood in for the separator's guesses. The mix has none, being what
+# a plain separation starts from. Never A and I, which side by side read as AI.
+PART_CODES = {"acapella": "AC", "instrumental": "IN"}
+
+# The mix less the instrumental is used as the vocal untouched only when the
+# instrumental nulled by this much, and is otherwise separated like any other mix. On
+# Say So the sum of Festival's instrument stems nulled 28 dB out of its mixdown, and
+# what was left scored 16.3 dB SDR as the vocal untouched against 18.5 separated by
+# demucs, so the bar sits over that. Of the synthetic pairs in the tests an exact one
+# measures 37 dB, held there by the vocal itself, one whose level dips 1 dB on every
+# kick 20 dB, and one a sample out of line 7 dB. No pair has yet been measured that
+# nulls cleanly and is not synthetic.
+NULL_CLEAN_DB = 30.0
+
+# Nothing sung reaches under 70 Hz, so in that band the whole mix is instrumental and
+# the null can be measured through the entire song, choruses included, which is where
+# two masters of one song part ways
+NULL_LOW_BAND = (20.0, 70.0)
+NULL_TOP = 16000.0
+
+# The quietest frames of the remainder against the mix, which are the ones with nobody
+# singing. A song sung through more than this much of its length has no such frames,
+# measures badly and is separated, which is the safe way to be wrong.
+NULL_QUIET_PERCENT = 5
+
+# Where voice a separator hears outside the vocal goes. On Say So, whose Festival
+# vocal stem holds every voice in the song, demucs still put enough of the instrumental
+# in its vocal stem that adding it to the real acapella brought the vocal from exact
+# down to 15.4 dB SDR.
+VOICE_ELSEWHERE = "Other"
+
+# A part named in a title, as an instrumental's own tag usually has it
+_PART_RE = re.compile(
+    r"\s*(?:[(\[]\s*(?:instrumental|a\s?c{1,2}app?ella)(?:\s+version)?\s*[)\]]"
+    r"|-\s*(?:instrumental|a\s?c{1,2}app?ella)(?:\s+version)?)\s*$", re.IGNORECASE)
 
 # A marker already on the end of a title, such as (FN) or (RF AT)
 _MARKER_RE = re.compile(r"\s*\(([A-Z][A-Z +]*)\)$")
@@ -234,17 +289,19 @@ def _shifted(donor: np.ndarray, offset: int, length: int) -> np.ndarray:
 
 # ------------------------------------------------------------------------ comparing
 
-def _band_power(audio: np.ndarray, rate: int) -> np.ndarray:
-    """Power per band per frame, bands by frames."""
+def _band_power(audio: np.ndarray, rate: int, edges=None) -> np.ndarray:
+    """Power per band per frame, bands by frames. The bands are the ones spectra are
+    compared in unless `edges` gives others."""
     mono = np.pad(audio.mean(axis=1), FFT_SAMPLES // 2)
     frames = np.lib.stride_tricks.sliding_window_view(mono, FFT_SAMPLES)[::HOP_SAMPLES]
     window = np.hanning(FFT_SAMPLES).astype(np.float32)
     freqs = np.fft.rfftfreq(FFT_SAMPLES, 1 / rate)
-    edges = np.geomspace(*BAND_EDGES, BANDS + 1)
+    if edges is None:
+        edges = np.geomspace(*BAND_EDGES, BANDS + 1)
     member = np.stack([(freqs >= low) & (freqs < high)
                        for low, high in zip(edges[:-1], edges[1:])]).astype(np.float32)
 
-    out = np.empty((BANDS, len(frames)), dtype=np.float32)
+    out = np.empty((len(member), len(frames)), dtype=np.float32)
     # A few hundred frames at a time, the whole spectrogram at once is gigabytes
     for start in range(0, len(frames), 256):
         spectrum = np.fft.rfft(frames[start:start + 256] * window, axis=1) / window.sum()
@@ -360,3 +417,214 @@ def graft(stem_set: StemSet, donor_path: str, work_dir: str, stem: str = GRAFT_S
     report = Graft(target.name, offset / rate, 20 * float(np.log10(gain)), windows, only_clean)
     return replace(stem_set, stems=stems, master=master,
                    extra={**stem_set.extra, "graft": report})
+
+
+# ------------------------------------------------------------------------- assemble
+
+@dataclass
+class Assembly:
+    """What a set was assembled from, and how each part was used."""
+
+    parts: list[str]                # which of the three were given
+    vocals: str                     # "acapella", "null" or "separated"
+    separated: list[str]            # what went through the separator
+    offsets: dict[str, float]       # seconds each part runs ahead of the mix
+    gains_db: dict[str, float]      # applied to each part to match the mix
+    null_db: float | None = None    # how far the instrumental nulled, where it was tried
+
+
+def assembly_marker(parts, separator: str = DEFAULT_SEPARATOR) -> str:
+    """The marker for a set this separator cut with these parts to help it."""
+    letters = [SEPARATOR_CODES[separator]]
+    letters += [code for part, code in PART_CODES.items() if part in parts]
+    return f"({' '.join(letters)})"
+
+
+def given_parts(mix: str | None = None, instrumental: str | None = None,
+                acapella: str | None = None) -> dict[str, str]:
+    """The parts that were given, by name in PARTS order. One alone is a job for
+    separate, or no job at all."""
+    given = {name: os.path.abspath(path)
+             for name, path in zip(PARTS, (mix, instrumental, acapella)) if path}
+    if len(given) < 2:
+        raise ValueError("assembling takes at least two of a mix, an instrumental and "
+                         "an acapella")
+    for path in given.values():
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"no such file: {path}")
+    return given
+
+
+def plain_title(title: str) -> str:
+    """A title without the part it names: Song (Instrumental) is a part of Song."""
+    return _PART_RE.sub("", title) or title
+
+
+def fit_gain(mix: np.ndarray, part: np.ndarray) -> float:
+    """The gain at which an aligned part comes out of the mix most completely.
+
+    Parts are often released louder than they sit in the mix, an instrumental having
+    more room under its limiter. Whatever else is in the mix does not correlate with
+    the part over a whole song, so it does not pull the fit.
+    """
+    power = float(np.vdot(part, part))
+    return float(np.vdot(mix, part)) / power if power else 1.0
+
+
+def null_depth(mix: np.ndarray, remainder: np.ndarray, rate: int) -> float:
+    """How many dB the instrumental nulled out of the mix by, leaving `remainder`.
+
+    The worse of two measures, since each misses what the other catches. Under 70 Hz
+    catches a master whose level moves with the kick, which nulls well in a quiet intro
+    and badly in every chorus. The quietest frames across the whole spectrum catch a
+    pair that is a fraction of a sample apart or differently equalised, which nulls
+    well in the bass and nowhere else.
+    """
+    edges = (*NULL_LOW_BAND, NULL_TOP)
+
+    def power(audio):
+        # A channel at a time, a difference between the sides vanishes from their mean
+        return sum(_band_power(audio[:, [side]], rate, edges) for side in (0, 1))
+
+    m, r = power(mix), power(remainder)
+    level_m, level_r = m.sum(axis=0), r.sum(axis=0)
+    active = level_m > level_m.max() * ACTIVE_RATIO
+    if not active.any():
+        return 0.0
+    quiet = np.percentile(level_r[active] / level_m[active], NULL_QUIET_PERCENT)
+    depth = -10 * float(np.log10(quiet + 1e-12))
+    # A song with no bass to speak of has nothing there to measure, or to pump
+    if m[0].sum() > level_m.sum() * 1e-4:
+        depth = min(depth, 10 * float(np.log10(m[0].sum() / (r[0].sum() + 1e-12))))
+    return depth
+
+
+def _stereo_info(ffmpeg: str, name: str, path: str) -> dict:
+    info = ff.probe(ffmpeg, path)
+    if int(sep._audio_stream(info).get("channels") or 0) > 2:
+        # Lining up and nulling are done on two channels, and a fold of a surround mix
+        # is not the stereo mix its instrumental or acapella was made from
+        raise ValueError(f"the {name} is not stereo, and only stereo parts can be assembled")
+    return info
+
+
+def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = None,
+             acapella: str | None = None, separator: str = DEFAULT_SEPARATOR,
+             model: str | None = None, device: str | None = None, progress=None,
+             ffmpeg: str | None = None) -> StemSet:
+    """Build a StemSet from any two or all of a song's mix, instrumental and acapella.
+
+    With a mix, each part is lined up to it and brought to its level, and the mix is
+    the mixdown. Without one the two parts cannot be lined up, having nothing in
+    common, so they are taken as starting together and their sum is the mixdown.
+
+    An instrumental is separated for every stem. An acapella is the vocal stem. A mix
+    missing one of them has the other taken out of it, and what remains is separated
+    too, unless it is the mix less an instrumental that nulled cleanly, which is the
+    vocal as it stands. Each stem is the sum of what every separation heard as that
+    stem, so the stems sum to the mix as nearly as the separator's own do.
+    """
+    given = given_parts(mix, instrumental, acapella)
+    ffmpeg = ff.find_ffmpeg(ffmpeg)
+    # Every separator writes at this rate, whatever it was given
+    rate = dm.SAMPLE_RATE
+    info = {name: _stereo_info(ffmpeg, name, path) for name, path in given.items()}
+    audio = {name: _decode(ffmpeg, path, rate) for name, path in given.items()}
+
+    offsets, gains = {}, {}
+    if "mix" in audio:
+        length = len(audio["mix"])
+        for name in PARTS[1:]:
+            if name not in audio:
+                continue
+            try:
+                offset = find_offset(audio["mix"], audio[name], rate)
+            except ValueError as e:
+                raise ValueError(f"the {name} against the mix: {e}") from None
+            part = _shifted(audio[name], offset, length)
+            gain = fit_gain(audio["mix"], part)
+            audio[name] = part * np.float32(gain)
+            offsets[name] = offset / rate
+            gains[name] = 20 * float(np.log10(abs(gain) + 1e-12))
+    else:
+        length = max(len(part) for part in audio.values())
+        audio = {name: _shifted(part, 0, length) for name, part in audio.items()}
+
+    vocal, vocals_from, null_db = audio.get("acapella"), "acapella", None
+    queue = {}
+    if "instrumental" in audio:
+        queue["instrumental"] = audio["instrumental"]
+        if vocal is None:
+            remainder = audio["mix"] - audio["instrumental"]
+            null_db = null_depth(audio["mix"], remainder, rate)
+            if null_db >= NULL_CLEAN_DB:
+                vocal, vocals_from = remainder, "null"
+            else:
+                queue["remainder"], vocals_from = remainder, "separated"
+    else:
+        queue["remainder"] = audio["mix"] - vocal
+
+    def staged(index):
+        if not progress:
+            return None
+        return lambda done, total, *stage: (
+            progress(done, total, *stage) if stage
+            else progress(index * total + done, len(queue) * total))
+
+    os.makedirs(work_dir, exist_ok=True)
+    scratch = os.path.join(work_dir, ".assemble")
+    os.makedirs(scratch, exist_ok=True)
+    try:
+        sums: dict[str, np.ndarray] = {}
+        models = None
+        for index, (name, part) in enumerate(queue.items()):
+            path = _encode(ffmpeg, part, rate, os.path.join(scratch, f"{name}.wav"))
+            separated = sep.separate(path, os.path.join(scratch, name), separator=separator,
+                                     model=model, device=device, progress=staged(index),
+                                     ffmpeg=ffmpeg)
+            models = separated.source
+            names = separated.names()
+            for stem in separated.stems:
+                heard = _shifted(_decode(ffmpeg, stem.path, rate), 0, length)
+                into = stem.name
+                # The parts already say where the vocal is, so voice heard anywhere
+                # else is the separator's mistake and stays with the instruments
+                if into == GRAFT_STEM and VOICE_ELSEWHERE in names and not (
+                        name == "remainder" and vocal is None):
+                    into = VOICE_ELSEWHERE
+                sums[into] = sums[into] + heard if into in sums else heard
+        if vocal is not None:
+            sums[GRAFT_STEM] = sums[GRAFT_STEM] + vocal if GRAFT_STEM in sums else vocal
+
+        stems = [Stem(name, _encode(ffmpeg, data, rate, os.path.join(work_dir, f"{name}.wav")))
+                 for name, data in sums.items()]
+        master = given.get("mix")
+        if master is None:
+            master = _encode(ffmpeg, audio["instrumental"] + audio["acapella"], rate,
+                             os.path.join(work_dir, "Master.wav"))
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        if os.path.isdir(work_dir) and not os.listdir(work_dir):
+            os.rmdir(work_dir)
+        raise
+    shutil.rmtree(scratch, ignore_errors=True)
+
+    # The mix knows the song best, and a part's own tags name the part
+    first = next(iter(given))
+    tags = sep.read_tags(info[first])
+    title = tags["title"] or os.path.splitext(os.path.basename(given[first]))[0]
+    report = Assembly(list(given), vocals_from, list(queue), offsets, gains, null_db)
+    return StemSet(
+        title=title if first == "mix" else plain_title(title),
+        artist=tags["artist"],
+        album=tags["album"],
+        year=tags["year"],
+        bpm=tags["bpm"],
+        key=tags["key"],
+        genre=tags["genre"],
+        cover=sep._extract_cover(ffmpeg, given[first], info[first], work_dir),
+        stems=stems,
+        master=master,
+        source=f"{models}, assembled from {' and '.join(given)}",
+        extra={"assembly": report, "separator": separator},
+    )

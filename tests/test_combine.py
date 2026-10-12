@@ -259,3 +259,207 @@ def test_nothing_is_written_when_nothing_differs(stem_files, monkeypatch, tmp_pa
     with pytest.raises(ValueError, match="nothing to graft"):
         jobs.graft_file(stem_files["folder"], stem_files["donor"], str(out), {})
     assert not out.exists() or os.listdir(out) == []
+
+
+# ------------------------------------------------------------------------ assemble
+
+PART_GAIN = 1.25
+
+
+def _backing():
+    """Forty seconds with nobody singing: a bass note, a kick on the beat and noise
+    that never repeats, so there is only one offset it lines up at."""
+    rng = np.random.default_rng(3)
+    t = np.arange(SECONDS * RATE) / RATE
+    beat = np.exp(-((t % 0.5) * 12))
+    out = 0.15 * np.sin(2 * np.pi * 50 * t) * beat + 0.05 * rng.standard_normal(len(t)) * beat
+    return np.stack([out, out], axis=1).astype(np.float32)
+
+
+@pytest.fixture(scope="module")
+def backing():
+    return _backing()
+
+
+@pytest.fixture(scope="module")
+def song(clean, backing):
+    return clean + backing
+
+
+def _pumped(backing):
+    """The same instrumental from a master that ducks 1 dB on every kick."""
+    t = np.arange(len(backing)) / RATE
+    return backing * (1 - 0.11 * np.exp(-((t % 0.5) * 12)))[:, None].astype(np.float32)
+
+
+def test_the_gain_a_part_sits_at_is_found(song, backing):
+    assert combine.fit_gain(song, backing * PART_GAIN) == pytest.approx(1 / PART_GAIN, rel=0.01)
+
+
+def test_an_exact_instrumental_nulls_cleanly(song, backing, clean):
+    assert combine.null_depth(song, clean, RATE) > combine.NULL_CLEAN_DB
+
+
+def test_a_master_that_pumps_does_not_null_cleanly(song, backing):
+    assert combine.null_depth(song, song - _pumped(backing), RATE) < combine.NULL_CLEAN_DB
+
+
+def test_a_pair_a_sample_apart_does_not_null_cleanly(song, backing):
+    assert combine.null_depth(song, song - np.roll(backing, 1, axis=0), RATE) < combine.NULL_CLEAN_DB
+
+
+@pytest.mark.parametrize("parts,separator,expected", [
+    (("mix", "instrumental"), "roformer", "(RF IN)"),
+    (("mix", "acapella"), "roformer", "(RF AC)"),
+    (("instrumental", "acapella"), "hybrid", "(HY AC IN)"),
+    (("mix", "instrumental", "acapella"), "demucs", "(DE AC IN)"),
+])
+def test_the_marker_names_the_parts_that_helped(parts, separator, expected):
+    assert combine.assembly_marker(parts, separator) == expected
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Song (Instrumental)", "Song"),
+    ("Song - Acapella", "Song"),
+    ("Song [A Cappella Version]", "Song"),
+    ("Song (Remix)", "Song (Remix)"),
+    ("Instrumental", "Instrumental"),
+])
+def test_a_part_named_in_a_title_is_dropped(title, expected):
+    assert combine.plain_title(title) == expected
+
+
+@pytest.fixture
+def parts(song, backing, clean, ffmpeg, tmp_path):
+    """The three files, the two parts louder than they sit in the mix and starting
+    later, as separately released parts do."""
+    folder = tmp_path / "parts"
+    folder.mkdir()
+    late = np.zeros((OFFSET, 2), dtype=np.float32)
+
+    def write(name, audio):
+        return combine._encode(ffmpeg, audio, RATE, str(folder / f"{name}.wav"))
+
+    return {
+        "mix": write("Song", song),
+        "instrumental": write("Song (Instrumental)",
+                              np.concatenate([late, backing * PART_GAIN])),
+        "acapella": write("Song (Acapella)", np.concatenate([late, clean * PART_GAIN])),
+        "pumped": write("Song (Pumped)", _pumped(backing)),
+    }
+
+
+@pytest.fixture
+def splitter(ffmpeg, monkeypatch):
+    """Stands in for a separator: everything it is given is drums and bass, a tenth
+    of it mistaken for voice. Records what it was asked to separate."""
+    from bejeweled.sources import separate
+
+    heard = []
+
+    def fake(path, work_dir, **kwargs):
+        os.makedirs(work_dir, exist_ok=True)
+        audio = combine._decode(ffmpeg, path, RATE)
+        heard.append(audio)
+        shares = {"Drums": 0.5, "Bass": 0.4, "Other": 0.0, "Vocals": 0.1}
+        stems = [Stem(name, combine._encode(ffmpeg, audio * share, RATE,
+                                            os.path.join(work_dir, f"{name}.wav")))
+                 for name, share in shares.items()]
+        return StemSet(title="x", stems=stems, source="a separator")
+
+    monkeypatch.setattr(separate, "separate", fake)
+    return heard
+
+
+def _stems(ffmpeg, stem_set):
+    return {s.name: combine._decode(ffmpeg, s.path, RATE) for s in stem_set.stems}
+
+
+def test_an_instrumental_that_nulls_leaves_the_vocal(parts, splitter, song, backing, clean,
+                                                    ffmpeg, tmp_path):
+    out = combine.assemble(str(tmp_path / "work"), mix=parts["mix"],
+                           instrumental=parts["instrumental"])
+    report = out.extra["assembly"]
+    assert (report.vocals, report.separated) == ("null", ["instrumental"])
+    assert report.offsets["instrumental"] == pytest.approx(OFFSET / RATE)
+    assert report.gains_db["instrumental"] == pytest.approx(-20 * np.log10(PART_GAIN), abs=0.1)
+
+    # Only the instrumental was separated, at the level it has in the mix
+    assert len(splitter) == 1
+    assert np.allclose(splitter[0], backing, atol=2e-3)
+    stems = _stems(ffmpeg, out)
+    # Voice the separator heard in the instrumental is not the vocal
+    assert np.allclose(stems["Vocals"], clean, atol=2e-3)
+    assert np.allclose(stems["Other"], backing * 0.1, atol=2e-3)
+    assert np.allclose(stems["Drums"] + stems["Bass"] + stems["Other"], backing, atol=2e-3)
+    assert out.master == parts["mix"] and out.title == "Song"
+
+
+def test_an_instrumental_that_does_not_null_has_the_remainder_separated(
+        parts, splitter, song, ffmpeg, tmp_path):
+    out = combine.assemble(str(tmp_path / "work"), mix=parts["mix"],
+                           instrumental=parts["pumped"])
+    report = out.extra["assembly"]
+    assert (report.vocals, report.separated) == ("separated", ["instrumental", "remainder"])
+    assert report.null_db < combine.NULL_CLEAN_DB
+    # The vocal is what the separator heard as voice in the remainder, and only there
+    assert np.allclose(_stems(ffmpeg, out)["Vocals"], splitter[1] * 0.1, atol=1e-4)
+    # Whatever each separation heard, the stems still sum to the mix
+    assert np.allclose(sum(_stems(ffmpeg, out).values()), song, atol=1e-4)
+
+
+def test_an_acapella_is_the_vocal_and_the_rest_of_the_mix_is_separated(
+        parts, splitter, backing, clean, ffmpeg, tmp_path):
+    out = combine.assemble(str(tmp_path / "work"), mix=parts["mix"],
+                           acapella=parts["acapella"])
+    report = out.extra["assembly"]
+    assert (report.vocals, report.separated) == ("acapella", ["remainder"])
+    assert np.allclose(splitter[0], backing, atol=2e-3)
+    assert np.allclose(_stems(ffmpeg, out)["Vocals"], clean, atol=2e-3)
+
+
+def test_all_three_separate_only_the_instrumental(parts, splitter, backing, clean, ffmpeg,
+                                                  tmp_path):
+    out = combine.assemble(str(tmp_path / "work"), mix=parts["mix"],
+                           instrumental=parts["instrumental"], acapella=parts["acapella"])
+    assert out.extra["assembly"].separated == ["instrumental"]
+    assert len(splitter) == 1
+    assert np.allclose(_stems(ffmpeg, out)["Vocals"], clean, atol=2e-3)
+    assert out.master == parts["mix"]
+
+
+def test_two_parts_without_a_mix_start_together_and_sum_to_the_mixdown(
+        parts, splitter, ffmpeg, tmp_path):
+    out = combine.assemble(str(tmp_path / "work"), instrumental=parts["instrumental"],
+                           acapella=parts["acapella"])
+    report = out.extra["assembly"]
+    assert report.offsets == {} and report.vocals == "acapella"
+    assert out.title == "Song"
+    master = _decode(ffmpeg, out.master)
+    assert np.allclose(master, sum(_stems(ffmpeg, out).values()), atol=1e-5)
+    assert os.path.dirname(out.master) == str(tmp_path / "work")
+
+
+def test_one_part_alone_is_refused(parts, tmp_path):
+    with pytest.raises(ValueError, match="at least two"):
+        combine.assemble(str(tmp_path / "work"), mix=parts["mix"])
+    assert not (tmp_path / "work").exists()
+
+
+def test_the_assembly_job_writes_a_marked_stem_file_and_cleans_up(parts, splitter, tmp_path):
+    out = tmp_path / "out"
+    written = jobs.assemble_file(str(out), {}, mix=parts["mix"],
+                                 instrumental=parts["instrumental"])
+    assert os.path.basename(written.path) == "Song (RF IN).stem.mp4"
+    assert written.stem_set.comment.endswith("a separator, assembled from mix and instrumental")
+    assert os.listdir(out) == ["Song (RF IN).stem.mp4"]
+    assert len(os.listdir(os.path.dirname(parts["mix"]))) == 4
+
+
+def test_the_assembly_job_names_a_folder_after_the_song(parts, splitter, tmp_path):
+    written = jobs.assemble_file(str(tmp_path / "out"), {}, fmt="files", title="Other Name",
+                                 instrumental=parts["instrumental"], acapella=parts["acapella"])
+    assert written.stem_set.title == "Other Name (RF AC IN)"
+    assert os.path.basename(written.path) == "Song - stems"
+    assert sorted(os.listdir(written.path)) == [
+        "Bass.wav", "Drums.wav", "Master.wav", "Other.wav", "Vocals.wav"]

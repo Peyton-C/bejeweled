@@ -138,3 +138,10 @@ def test_combine_scopes_its_actions_like_a_source(parser):
         parser.parse_args(["combine"])
     with pytest.raises(SystemExit):
         parser.parse_args(["combine", "graft", "clean.stem.mp4"])
+
+
+def test_assemble_takes_its_parts_as_options(parser):
+    args = parser.parse_args(["combine", "assemble", "--mix", "song.flac",
+                              "--instrumental", "inst.flac", "--separator", "demucs"])
+    assert (args.command, args.action) == ("combine", "assemble")
+    assert (args.mix, args.instrumental, args.acapella) == ("song.flac", "inst.flac", None)

@@ -75,6 +75,8 @@ mark_titles = true
 [combine]
 # Mark grafted titles, since part of the vocal is a separation. The separator's
 # letters follow a plus, and join a marker the stems already had: (+RF), (FN +RF).
+# Assembled titles get the separator's letters and one pair for each part that
+# helped it, AC for an acapella and IN for an instrumental: (RF IN), (RF AC IN).
 mark_titles = true
 
 [engine]

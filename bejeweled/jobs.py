@@ -385,3 +385,60 @@ def graft_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | No
     if not os.listdir(work):
         os.rmdir(work)
     return Written(out_path, stem_set, engine_stems)
+
+
+def assemble_file(out_dir: str, cfg: dict, *, mix: str | None = None,
+                  instrumental: str | None = None, acapella: str | None = None,
+                  title: str | None = None, separator: str | None = None,
+                  model: str | None = None, device: str | None = None,
+                  suffix: str | None = None, no_suffix: bool = False,
+                  fmt: str | None = None, codec: str | None = None,
+                  palette: str | None = None, engine_library: str | None = None,
+                  engine_key: str | None = None, progress=None) -> Written:
+    """Build stems from any two or all of a song's mix, instrumental and acapella.
+
+    None of the three is written to. The mix, where there is one, is the mixdown.
+    """
+    from . import demucs as dm
+    from .sources import combine, separate
+
+    fmt = _format(fmt, cfg)
+    target = engine_target(fmt, cfg, engine_library, engine_key)
+    sep_cfg = cfg.get("separate", {})
+    separator = _separator(separator, cfg)
+    out_dir = os.path.abspath(out_dir)
+    given = combine.given_parts(mix, instrumental, acapella)
+    base = os.path.splitext(os.path.basename(next(iter(given.values()))))[0]
+    work = os.path.join(out_dir, f"{safe(combine.plain_title(base))} - stems")
+
+    stem_set = combine.assemble(
+        work, **given, separator=separator,
+        model=model or sep_cfg.get("model"),
+        device=device or sep_cfg.get("device") or dm.default_device(),
+        progress=progress,
+    )
+
+    if title:
+        stem_set.title = title
+    marker = None if no_suffix else suffix or config.title_suffix(
+        combine.SOURCE_NAME, combine.assembly_marker(given, separator),
+        combine.MARK_TITLES_BY_DEFAULT, cfg)
+    if marker:
+        stem_set.title = f"{stem_set.title} {marker}"
+    if cfg.get("metadata", {}).get("write_comment", True):
+        stem_set.comment = stem_set.describe_source(__version__)
+
+    if fmt == "files":
+        return Written(work, stem_set)
+
+    out_path = _write_ni(stem_set, out_dir, cfg, separate.NI_MERGE, codec, palette)
+    engine_stems = target and write_engine(stem_set, out_path, target, separate.NI_MERGE)
+    written = [s.path for s in stem_set.stems] + [stem_set.cover]
+    if stem_set.master not in given.values():
+        written.append(stem_set.master)
+    for leftover in written:
+        if leftover and os.path.exists(leftover):
+            os.remove(leftover)
+    if not os.listdir(work):
+        os.rmdir(work)
+    return Written(out_path, stem_set, engine_stems)

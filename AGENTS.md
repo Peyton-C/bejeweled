@@ -33,6 +33,11 @@ separator's letters after a plus, joined to any marker the stems already carried
 `(+RF)`, or `(FN +RF)` for Festival stems. The plus keeps it apart from a full
 separation of the same song.
 
+An assembly is a separation helped by the song's instrumental, acapella or both, so it
+is marked as a separation with letters for the parts that helped: `(RF IN)`, `(RF AC)`,
+`(RF AC IN)`. The mix has no letters, being what a plain separation starts from. Never
+single letters for the parts, since `A` and `I` side by side read as AI.
+
 ## What goes where
 
 `README.md` is what a user needs to get in and pointed the right way, nothing more. It
@@ -125,7 +130,8 @@ is the whole list, which is why a flag suffices. Do not add an output format wit
 asking.
 
 `combine.py` is the one source that reads other sources: it takes a `StemSet` from one
-version of a song and audio from another, and returns a new set. It is also the only
+version of a song and audio from another, and returns a new set, or runs `separate`
+over a song's instrumental and what its acapella leaves of the mix. It is also the only
 module that needs numpy, lining two versions up to the sample being out of FFmpeg's
 reach.
 

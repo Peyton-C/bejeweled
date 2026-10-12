@@ -28,6 +28,7 @@ bejeweled separate "Song.flac"                      # split any song into stems
 bejeweled separate "Song (Atmos).wav"               # a surround or Atmos render
 
 bejeweled combine graft "Clean.stem.mp4" "Explicit.flac"   # explicit vocal into clean stems
+bejeweled combine assemble --mix "Song.flac" --instrumental "Instrumental.flac"   # a better separation
 
 bejeweled convert ./my-stems/        # build a stem file from a folder of stems
 bejeweled convert track.stem.mp4     # give a stem file its Engine DJ stems
@@ -53,7 +54,7 @@ Each source is its own subcommand, so `bejeweled festival --help` lists what Fes
 | Doc | Covers |
 | --- | --- |
 | [Separation](docs/separate.md) | Splitting any song with RoFormer or demucs, including 5.1 and Dolby Atmos renders |
-| [Combining](docs/combine.md) | Grafting the explicit vocal into real stems of a clean edit |
+| [Combining](docs/combine.md) | Grafting the explicit vocal into real stems of a clean edit, and separating with an instrumental or acapella to help |
 | [Fortnite Festival](docs/festival.md) | Ripping tracks, the metadata Festival provides, and the count-in it puts on every song |
 | [Native Instruments stems](docs/ni.md) | What a `.stem.mp4` contains, which codecs work where, and what bejeweled writes inside it |
 | [Engine DJ](docs/engine.md) | Adding a song to an Engine DJ library with its stems, and what a `.stems` file contains |

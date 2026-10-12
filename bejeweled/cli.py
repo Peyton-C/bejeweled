@@ -94,6 +94,22 @@ def build_parser() -> argparse.ArgumentParser:
                                           "such as '(+RF)'")
     c_graft.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
+    c_asm = comb.add_parser("assemble", help="build stems from a song's mix, instrumental "
+                                             "and acapella, any two or all three")
+    c_asm.add_argument("--mix", help="the full song")
+    c_asm.add_argument("--instrumental", help="the song without its vocal")
+    c_asm.add_argument("--acapella", help="the vocal alone")
+    _add_output_options(c_asm)
+    c_asm.add_argument("--title", help="the title to give the result (default: the "
+                                       "title tag of the mix, or of the instrumental)")
+    c_asm.add_argument("--separator", choices=list(SEPARATORS),
+                       help=f"what separates (default: {DEFAULT_SEPARATOR})")
+    c_asm.add_argument("--model", help="demucs model, for demucs and the hybrid")
+    c_asm.add_argument("--device", help="demucs's device: cpu, cuda or mps")
+    c_asm.add_argument("--suffix", help="appended to the title instead of a marker "
+                                        "such as '(RF IN)'")
+    c_asm.add_argument("--no-suffix", action="store_true", help="never append a suffix")
+
     # --- verbs that act on stem files, whatever produced them ---
     p_conv = sub.add_parser("convert", help="build a stem file from a folder of stems, or "
                                             "Engine DJ stems or separate stems from a "
@@ -143,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "festival":
         handler = {"rip": _rip, "list": _list}[args.action]
     elif args.command == "combine":
-        handler = {"graft": _graft}[args.action]
+        handler = {"graft": _graft, "assemble": _assemble}[args.action]
     else:
         handler = {
             "separate": _separate, "convert": _convert, "recolor": _recolor,
@@ -261,7 +277,8 @@ def _separate(args) -> int:
     return 0
 
 
-def _separate_one(path, args, cfg) -> int:
+def _stages():
+    """A progress callback that prints each stage of a separation on its own line."""
     last = [None]
 
     def progress(done, total, stage="separating"):
@@ -274,6 +291,11 @@ def _separate_one(path, args, cfg) -> int:
             last[0] = (stage, percent)
             print(f"\r  {stage} {percent}%", end="", flush=True)
 
+    return progress
+
+
+def _separate_one(path, args, cfg) -> int:
+    progress = _stages()
     written = jobs.separate_file(
         path, args.out, cfg, separator=args.separator, layout=args.layout,
         model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
@@ -297,18 +319,7 @@ def _clock(seconds: float) -> str:
 
 def _graft(args) -> int:
     cfg = config.load()
-    last = [None]
-
-    def progress(done, total, stage="separating"):
-        if not total:
-            return
-        percent = done * 100 // total
-        if (stage, percent) != last[0]:
-            if last[0] and last[0][0] != stage:
-                print()
-            last[0] = (stage, percent)
-            print(f"\r  {stage} {percent}%", end="", flush=True)
-
+    progress = _stages()
     written = jobs.graft_file(
         args.stems, args.mix, args.out, cfg, title=args.title, separator=args.separator,
         model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
@@ -324,6 +335,39 @@ def _graft(args) -> int:
         # Printed because nothing was done there, and it may be an edit worth checking
         print(f"  left alone, only in the stems: "
               f"{' '.join(_clock(w.start) for w in report.only_clean)}")
+
+    _report(written)
+    return 0
+
+
+def _assemble(args) -> int:
+    cfg = config.load()
+    written = jobs.assemble_file(
+        args.out, cfg, mix=args.mix, instrumental=args.instrumental, acapella=args.acapella,
+        title=args.title, separator=args.separator, model=args.model, device=args.device,
+        suffix=args.suffix, no_suffix=args.no_suffix, fmt=args.format, codec=args.codec,
+        palette=args.palette, engine_library=args.engine_library,
+        engine_key=args.engine_key, progress=_stages(),
+    )
+    print()
+
+    report = written.stem_set.extra["assembly"]
+    if "mix" not in report.parts:
+        # Printed because it is an assumption, and a wrong one is heard at once
+        print("  no mix to line the parts up against, taken as starting together")
+    for part, offset in report.offsets.items():
+        if abs(offset) >= 0.0005:
+            print(f"  {part} starts {abs(offset):.3f}s {'later' if offset > 0 else 'earlier'} "
+                  f"than the mix, lined up")
+    if report.vocals == "acapella":
+        print("  vocals: the acapella")
+    elif report.vocals == "null":
+        print(f"  vocals: the mix less the instrumental, which nulled by {report.null_db:.0f} dB")
+    else:
+        print(f"  vocals: separated from the mix less the instrumental, which nulled "
+              f"by only {report.null_db:.0f} dB")
+    others = {"instrumental": "the instrumental", "remainder": "the mix less the acapella"}
+    print(f"  the rest: separated from {others[report.separated[0]]}")
 
     _report(written)
     return 0

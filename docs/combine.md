@@ -5,6 +5,8 @@ bejeweled builds one set of stems from more than one version of the same song.
 bejeweled combine graft "Work Work (FN).stem.mp4" "Work Bitch.flac" --title "Work Bitch"
 bejeweled combine graft ./clean-stems/ "Explicit.flac"
 bejeweled combine graft "Clean.stem.mp4" "Explicit.flac" --separator hybrid
+bejeweled combine assemble --mix "Song.flac" --instrumental "Song (Instrumental).flac"
+bejeweled combine assemble --instrumental "Instrumental.flac" --acapella "Acapella.flac" --title "Song"
 ```
 
 ## Grafting
@@ -27,15 +29,35 @@ A song whose hook is the censored word has a graft every bar, and with the vocal
 
 The mixdown in the stem file gets the same grafts as the vocal stem and is otherwise left as it was.
 
+## Assembling
+A song with no real stems anywhere often still has an official instrumental or acapella. bejeweled separates the song with those beside it, so the separator has less to guess. Give it any two of `--mix`, `--instrumental` and `--acapella`, or all three. None of them is written to.
+
+| Given | Vocals | Drums, bass and other |
+| --- | --- | --- |
+| Mix and instrumental | The mix less the instrumental | Separated from the instrumental |
+| Mix and acapella | The acapella | Separated from the mix less the acapella |
+| Instrumental and acapella | The acapella | Separated from the instrumental |
+| All three | The acapella | Separated from the instrumental |
+
+An acapella is the vocal stem as it is. An instrumental has no voice to bleed into the other stems, which is where a separation of the full mix loses most. Backing vocals that an instrumental keeps stay with it, and land in Other.
+
+The mix less the instrumental is the vocal untouched only when the two null cleanly. Most instrumentals are mastered apart from their mix and leave some of themselves behind, so bejeweled measures the null and, when it falls short, separates what is left as well. That is still closer to the vocal than a separation of the mix, and bejeweled prints which it did.
+
+With a mix, bejeweled lines each part up to it and matches its level itself, and the mix is the mixdown in the stem file. The parts must be the same recording at the same speed, and bejeweled refuses one that drifts. Without a mix the two parts share nothing to line up by, so they must start together, and their sum is the mixdown.
+
+Every part must be stereo. A part that is not the same edit as the mix, a radio edit's instrumental against the album version, is refused or leaves the difference in the stems.
+
 ## Options
+`--separator`, `--model` and `--device` apply to both actions.
+
 | Option | Config | Default |
 | --- | --- | --- |
-| `--title` | | the explicit file's title tag, or the stems' title |
+| `--title` | | graft: the explicit file's title tag, or the stems' title. assemble: the title tag of the mix, or of the instrumental |
 | `--separator` | `separator` under `[separate]` | `roformer` |
 | `--model` | `model` under `[separate]` | as for `separate` |
 | `--device` | `device` under `[separate]` | as for `separate` |
 
-Pass `--title` when the two versions are named differently, as a clean edit often is. Artist, BPM, key and cover art come from the clean stems. The separators and what they need are covered in [Separation](separate.md).
+Pass `--title` to a graft when the two versions are named differently, as a clean edit often is. Artist, BPM, key and cover art come from the clean stems. An assembly takes them from the mix, or from the instrumental when there is no mix, and drops a trailing `(Instrumental)` or `(Acapella)` from the title. The separators and what they need are covered in [Separation](separate.md).
 
 ## Title marker
 Part of the vocal is a separation, so bejeweled marks the title to keep the file from passing for real stems of the explicit release. The separator's letters follow a plus, and join a marker the stems already carried.
@@ -44,5 +66,13 @@ Part of the vocal is a separation, so bejeweled marks the title to keep the file
 | --- | --- | --- | --- |
 | Unmarked | `(+RF)` | `(+HY)` | `(+DE)` |
 | Marked `(FN)` | `(FN +RF)` | `(FN +HY)` | `(FN +DE)` |
+
+An assembly is still a separation, so it is marked as one, with letters for the parts that helped: `AC` for an acapella and `IN` for an instrumental.
+
+| Given | roformer | hybrid | demucs |
+| --- | --- | --- | --- |
+| Mix and instrumental | `(RF IN)` | `(HY IN)` | `(DE IN)` |
+| Mix and acapella | `(RF AC)` | `(HY AC)` | `(DE AC)` |
+| Instrumental and acapella, with or without the mix | `(RF AC IN)` | `(HY AC IN)` | `(DE AC IN)` |
 
 Pass `--suffix` to change it, or `--no-suffix` to drop it, and set `mark_titles = false` under `[combine]` to turn it off entirely.
