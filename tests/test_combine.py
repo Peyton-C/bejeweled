@@ -296,6 +296,17 @@ def test_the_gain_a_part_sits_at_is_found(song, backing):
     assert combine.fit_gain(song, backing * PART_GAIN) == pytest.approx(1 / PART_GAIN, rel=0.01)
 
 
+def test_parts_out_of_line_are_still_brought_to_their_level(song, backing, clean):
+    # The same parts from a transfer that sits a little out of line with the mix
+    instrumental, acapella = backing * PART_GAIN, np.roll(clean, 30, axis=0) * PART_GAIN
+    assert abs(combine.fit_gain(song, acapella)) < 0.5 / PART_GAIN
+    levels = combine.fit_levels(song, {"instrumental": instrumental, "acapella": acapella}, RATE)
+    assert levels == pytest.approx({"instrumental": 1 / PART_GAIN, "acapella": 1 / PART_GAIN},
+                                   rel=0.05)
+    alone = combine.fit_levels(song, {"acapella": acapella}, RATE)
+    assert alone["acapella"] == pytest.approx(1 / PART_GAIN, rel=0.05)
+
+
 def test_an_exact_instrumental_nulls_cleanly(song, backing, clean):
     assert combine.null_depth(song, clean, RATE) > combine.NULL_CLEAN_DB
 
@@ -416,6 +427,23 @@ def test_an_acapella_is_the_vocal_and_the_rest_of_the_mix_is_separated(
     assert (report.vocals, report.separated) == ("acapella", ["remainder"])
     assert np.allclose(splitter[0], backing, atol=2e-3)
     assert np.allclose(_stems(ffmpeg, out)["Vocals"], clean, atol=2e-3)
+
+
+def test_an_acapella_that_will_not_come_out_leaves_the_mix_whole(
+        parts, splitter, song, clean, ffmpeg, tmp_path):
+    # A sample a second slow, which no one offset lines up
+    at = np.arange(len(clean)) * (1 + 1 / RATE)
+    slow = np.stack([np.interp(at, np.arange(len(clean)), clean[:, side])
+                     for side in (0, 1)], axis=1).astype(np.float32)
+    acapella = combine._encode(ffmpeg, slow * PART_GAIN, RATE, str(tmp_path / "slow.wav"))
+    out = combine.assemble(str(tmp_path / "work"), mix=parts["mix"], acapella=acapella)
+    report = out.extra["assembly"]
+    assert (report.vocals, report.separated) == ("acapella", ["mix"])
+    assert np.allclose(splitter[0], song, atol=1e-4)
+    # The acapella at the level it sits at, and none of what the separator called voice
+    assert report.gains_db["acapella"] == pytest.approx(-20 * np.log10(PART_GAIN), abs=0.5)
+    vocals = _stems(ffmpeg, out)["Vocals"]
+    assert np.sqrt(np.mean(vocals ** 2)) == pytest.approx(np.sqrt(np.mean(clean ** 2)), rel=0.06)
 
 
 def test_all_three_separate_only_the_instrumental(parts, splitter, backing, clean, ffmpeg,

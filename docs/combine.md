@@ -43,6 +43,8 @@ An acapella is the vocal stem as it is. An instrumental has no voice to bleed in
 
 The mix less the instrumental is the vocal untouched only when the two null cleanly. Most instrumentals are mastered apart from their mix and leave some of themselves behind, so bejeweled measures the null and, when it falls short, separates what is left as well. That is still closer to the vocal than a separation of the mix, and bejeweled prints which it did.
 
+An acapella comes out of its mix only when the two are the same master in step. One from another master, or running a little fast or slow, would leave most of the vocal behind, so bejeweled measures how much comes out and, when it falls short, separates the whole mix for the other stems and keeps the acapella as the vocal. Voices the acapella lacks are then in no stem, and bejeweled prints which it did.
+
 With a mix, bejeweled lines each part up to it and matches its level itself, and the mix is the mixdown in the stem file. The parts must be the same recording at the same speed, and bejeweled refuses one that drifts. Without a mix the two parts share nothing to line up by, so they must start together, and their sum is the mixdown.
 
 Every part must be stereo. A part that is not the same edit as the mix, a radio edit's instrumental against the album version, is refused or leaves the difference in the stems.

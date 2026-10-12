@@ -120,6 +120,15 @@ PART_CODES = {"acapella": "AC", "instrumental": "IN"}
 # nulls cleanly and is not synthetic.
 NULL_CLEAN_DB = 30.0
 
+# An acapella is taken out of the mix only when what comes out is within this of all of
+# it, and the mix is otherwise separated whole with the acapella as its vocal. A dB
+# short leaves a fifth of the vocal behind, and the separator's vocal from a remainder
+# goes to Other, so a mix the acapella barely touched put the whole vocal there. 4
+# Minutes' acapella runs a sample a second slow against its mix and came out 31 dB
+# short, 3 dB short even with the drift followed, and Hot N Cold's 19 dB. The exact
+# acapella in the tests comes out whole to within 0.1 dB.
+ACAPELLA_FITS_DB = 1.0
+
 # Nothing sung reaches under 70 Hz, so in that band the whole mix is instrumental and
 # the null can be measured through the entire song, choruses included, which is where
 # two masters of one song part ways
@@ -465,10 +474,46 @@ def fit_gain(mix: np.ndarray, part: np.ndarray) -> float:
 
     Parts are often released louder than they sit in the mix, an instrumental having
     more room under its limiter. Whatever else is in the mix does not correlate with
-    the part over a whole song, so it does not pull the fit.
+    the part over a whole song, so it does not pull the fit. Neither does whatever of
+    the part itself fails to line up, so this is the gain to subtract at, and reads
+    under the level the part sits at wherever the two are not one waveform.
     """
     power = float(np.vdot(part, part))
     return float(np.vdot(mix, part)) / power if power else 1.0
+
+
+def fit_levels(mix: np.ndarray, parts: dict[str, np.ndarray], rate: int) -> dict[str, float]:
+    """The gain that brings each aligned part to the level it sits at in the mix.
+
+    The fit is on power in bands and not on the waveform, since a part from another
+    master, or one that creeps a few samples against the mix over the song, stops
+    correlating long before it stops being the same sound at the same level. Hot N
+    Cold's acapella wanders 30 samples either way of its mix and correlates with it at
+    0.05, which fit_gain read as 21.5 dB down where this reads 2.7, and the vocal came
+    out 19 dB under two separations of the same mix. Its instrumental, 7 samples out
+    at either end, read 3.3 dB down and 2.0 here, which is also what the intro measures
+    with nobody singing over it.
+
+    Both parts account for the whole mix between them. One alone leaves the rest of
+    the song, which is taken as a level of its own in each band, or all of it would
+    count towards the part. What of the rest still rises and falls with the part reads
+    as the part, 0.2 dB of Hot N Cold's acapella and 0.3 of its instrumental.
+    """
+    def power(audio):
+        # A channel at a time, a part out of phase between the sides is still there
+        return sum(_band_power(audio[:, [side]], rate) for side in (0, 1)).astype(np.float64)
+
+    m = power(mix)
+    p = [power(part) for part in parts.values()]
+    # Every band counts alike, or the fit is of the bass alone
+    weight = 1 / (m.mean(axis=1, keepdims=True) + 1e-20)
+    if len(p) == 1:
+        m, p = m - m.mean(axis=1, keepdims=True), [p[0] - p[0].mean(axis=1, keepdims=True)]
+    squared = np.linalg.lstsq(np.stack([(x * weight).ravel() for x in p], axis=1),
+                              (m * weight).ravel(), rcond=None)[0]
+    # A part whose power the mix does not follow at all has no level to find this way
+    return {name: float(np.sqrt(g)) if g > 0 else abs(fit_gain(mix, part))
+            for (name, part), g in zip(parts.items(), squared)}
 
 
 def null_depth(mix: np.ndarray, remainder: np.ndarray, rate: int) -> float:
@@ -521,7 +566,8 @@ def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = N
     An instrumental is separated for every stem. An acapella is the vocal stem. A mix
     missing one of them has the other taken out of it, and what remains is separated
     too, unless it is the mix less an instrumental that nulled cleanly, which is the
-    vocal as it stands. Each stem is the sum of what every separation heard as that
+    vocal as it stands. An acapella that does not come out of its mix is left in, and
+    the mix is separated whole for everything but the vocal. Each stem is the sum of what every separation heard as that
     stem, so the stems sum to the mix as nearly as the separator's own do.
     """
     given = given_parts(mix, instrumental, acapella)
@@ -531,7 +577,7 @@ def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = N
     info = {name: _stereo_info(ffmpeg, name, path) for name, path in given.items()}
     audio = {name: _decode(ffmpeg, path, rate) for name, path in given.items()}
 
-    offsets, gains = {}, {}
+    offsets, gains, whole_mix = {}, {}, False
     if "mix" in audio:
         length = len(audio["mix"])
         for name in PARTS[1:]:
@@ -541,10 +587,20 @@ def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = N
                 offset = find_offset(audio["mix"], audio[name], rate)
             except ValueError as e:
                 raise ValueError(f"the {name} against the mix: {e}") from None
-            part = _shifted(audio[name], offset, length)
-            gain = fit_gain(audio["mix"], part)
-            audio[name] = part * np.float32(gain)
+            audio[name] = _shifted(audio[name], offset, length)
             offsets[name] = offset / rate
+        parts = {name: audio[name] for name in offsets}
+        fitted = {name: fit_gain(audio["mix"], part) for name, part in parts.items()}
+        levels = fit_levels(audio["mix"], parts, rate)
+        if len(parts) == 2:
+            # Nothing is taken out of the mix when both parts are given, so they only
+            # have to sit at the right level, not null
+            fitted = levels
+        elif "acapella" in parts and (
+                abs(fitted["acapella"]) * 10 ** (ACAPELLA_FITS_DB / 20) < levels["acapella"]):
+            fitted, whole_mix = levels, True
+        for name, gain in fitted.items():
+            audio[name] = parts[name] * np.float32(gain)
             gains[name] = 20 * float(np.log10(abs(gain) + 1e-12))
     else:
         length = max(len(part) for part in audio.values())
@@ -561,6 +617,8 @@ def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = N
                 vocal, vocals_from = remainder, "null"
             else:
                 queue["remainder"], vocals_from = remainder, "separated"
+    elif whole_mix:
+        queue["mix"] = audio["mix"]
     else:
         queue["remainder"] = audio["mix"] - vocal
 
@@ -587,6 +645,10 @@ def assemble(work_dir: str, mix: str | None = None, instrumental: str | None = N
             for stem in separated.stems:
                 heard = _shifted(_decode(ffmpeg, stem.path, rate), 0, length)
                 into = stem.name
+                # An acapella that would not come out of the mix is still the vocal,
+                # and what the separator heard of it in the mix is the same vocal again
+                if into == GRAFT_STEM and name == "mix":
+                    continue
                 # The parts already say where the vocal is, so voice heard anywhere
                 # else is the separator's mistake and stays with the instruments
                 if into == GRAFT_STEM and VOICE_ELSEWHERE in names and not (

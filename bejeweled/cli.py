@@ -366,7 +366,8 @@ def _assemble(args) -> int:
     else:
         print(f"  vocals: separated from the mix less the instrumental, which nulled "
               f"by only {report.null_db:.0f} dB")
-    others = {"instrumental": "the instrumental", "remainder": "the mix less the acapella"}
+    others = {"instrumental": "the instrumental", "remainder": "the mix less the acapella",
+              "mix": "the mix, which the acapella would not come out of"}
     print(f"  the rest: separated from {others[report.separated[0]]}")
 
     _report(written)
