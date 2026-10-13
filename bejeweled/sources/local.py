@@ -30,12 +30,17 @@ ALIASES = {
 MASTER_NAMES = {"master", "mixdown", "mix", "full", "original"}
 
 
-def from_folder(folder: str, title: str | None = None, artist: str | None = None) -> StemSet:
+def from_folder(folder: str, title: str | None = None, artist: str | None = None,
+                names=None) -> StemSet:
     """Build a StemSet from a folder of separate stem files.
 
     File names are matched case-insensitively against the common stem names, so both
     `Drums.wav` and `04_vocals.flac` land in the right slot. Anything unrecognised is
     kept under its own name rather than dropped, and folding happens at write time.
+
+    With `names`, the stems the caller expects, a file is matched by its whole name
+    against those alone. The common names would get in the way: they match anywhere in
+    a name, so a slot called Bass Synths would have its file read as Bass.
     """
     if not os.path.isdir(folder):
         raise FileNotFoundError(f"no such folder: {folder}")
@@ -51,10 +56,14 @@ def from_folder(folder: str, title: str | None = None, artist: str | None = None
             master = path
             continue
 
-        matched = next(
-            (slot for alias, slot in ALIASES.items() if alias in stem_name),
-            os.path.splitext(entry)[0],
-        )
+        if names:
+            matched = next((name for name in names if name.lower() == stem_name),
+                           os.path.splitext(entry)[0])
+        else:
+            matched = next(
+                (slot for alias, slot in ALIASES.items() if alias in stem_name),
+                os.path.splitext(entry)[0],
+            )
         stems.append(Stem(name=matched, path=path))
 
     if not stems:

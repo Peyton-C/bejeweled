@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("-j", "--jobs", type=int,
                         help="how many inputs to convert at once (default: one per core)")
     p_conv.add_argument("--palette", help="palette name, or 4 comma-separated hex colours")
+    p_conv.add_argument("--slots", help="what a folder's four stems are, in order, when "
+                                        "they are not drums, bass, other and vocals, "
+                                        "e.g. Drums,Music,Sax,Vocals")
     p_conv.add_argument("--suffix", help="appended to the title, e.g. '(ENGINE)'")
     p_conv.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
@@ -425,11 +428,27 @@ def _convert(args) -> int:
     return 0
 
 
+def _slots(spec: str | None):
+    """The four slot names --slots gives, or None."""
+    if not spec:
+        return None
+    names = [name.strip() for name in spec.split(",")]
+    if len(names) != len(NI_SLOTS) or not all(names):
+        raise ValueError(f"--slots takes {len(NI_SLOTS)} names, such as Drums,Music,Sax,Vocals")
+    if len({name.lower() for name in names}) != len(names):
+        raise ValueError("--slots names each slot once")
+    return names
+
+
 def _convert_one(target, args, cfg):
     """Convert one input, returning what was written and whether the track itself was."""
     from .sources import local
 
+    names = _slots(args.slots)
     if local.is_stem_file(target):
+        if names:
+            raise ValueError("--slots names a folder's stems, and "
+                             f"{os.path.basename(target)} is a stem file")
         if args.format == "ni-stem":
             raise ValueError(f"{os.path.basename(target)} is already a stem file")
         if args.format == "files":
@@ -442,7 +461,13 @@ def _convert_one(target, args, cfg):
     fmt = args.format or cfg.get("output", {}).get("format")
     engine = jobs.engine_target(fmt if fmt == "engine" else "ni-stem", cfg,
                                 args.engine_library, args.engine_key)
-    stem_set = local.from_folder(target)
+    stem_set = local.from_folder(target, names=names)
+    if names:
+        missing = [name for name in names if not stem_set.get(name)]
+        unnamed = [name for name in stem_set.names() if name not in names]
+        if missing or unnamed:
+            raise ValueError(f"{target} has {', '.join(stem_set.names())}, and --slots "
+                             f"names {', '.join(names)}")
 
     suffix = None if args.no_suffix else (args.suffix or _source_suffix(local, cfg))
     if suffix:
@@ -454,13 +479,18 @@ def _convert_one(target, args, cfg):
         os.path.dirname(os.path.normpath(target)) or ".",
         f"{jobs.safe(stem_set.title)}.stem.mp4",
     )
-    merge = {"Lead": "Other"} if stem_set.get("Lead") else None
+    if names:
+        # Each named stem to the slot in its position, whatever that slot is called
+        merge = dict(zip(names, NI_SLOTS))
+    else:
+        merge = {"Lead": "Other"} if stem_set.get("Lead") else None
     ni_stem.write(
         stem_set, out_path,
         codec=args.codec or cfg.get("output", {}).get("codec", "aac"),
         sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
         merge=merge,
         colors=_colors(args, cfg),
+        names=names,
     )
     stems = engine and jobs.write_engine(stem_set, out_path, engine, merge)
     return jobs.Written(out_path, stem_set, stems), True

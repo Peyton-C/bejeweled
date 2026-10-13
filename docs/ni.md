@@ -13,6 +13,17 @@ The 4 stems are always in the same order, and Other is the slot for melody, inst
 
 A source that provides more parts than this is folded down when the file is written, so nothing is lost, it is only summed.
 
+## Slot names
+The four slots suit most songs, but not one whose hook is an instrument that would otherwise be buried in Other. `bejeweled convert` can name the slots itself when it builds a stem file from a folder.
+
+```sh
+bejeweled convert ./my-stems/ --slots Drums,Music,Sax,Vocals
+```
+
+bejeweled matches each name to the file of that name in the folder, and writes them in the order given. The folder must hold exactly those four stems, beside the mixdown if there is one.
+
+The names are labels. A player still treats the slots as drums, bass, other and vocals wherever it goes by position, and Engine DJ, which has no names of its own to change, always does.
+
 ## Codecs
 Native Instruments allows AAC and ALAC. Mixxx is more permissive and accepts any codec as long as every track in the file uses the same one, the sample rate matches, and each track is stereo.
 

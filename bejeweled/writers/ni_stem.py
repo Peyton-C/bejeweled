@@ -84,11 +84,19 @@ def _scan(f, end: int, wanted: bytes) -> bytes | None:
 # --------------------------------------------------------------------------- write
 
 def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int = 44100,
-          merge: dict[str, str] | None = None, colors=None, ffmpeg: str | None = None) -> str:
+          merge: dict[str, str] | None = None, colors=None, ffmpeg: str | None = None,
+          names=None) -> str:
     """Render a StemSet to a .stem.mp4.
 
     The set is folded to NI's four slots first; anything that maps onto the same slot
     is summed. A mixdown is synthesised from the stems when the set has none.
+
+    `names` is what the file calls its four slots, in order, when they do not hold
+    drums, bass, other and vocals. The slots themselves stay where they are, so `merge`
+    still says which slot a stem goes to. Run Away with Me is why: its sax is the hook,
+    and BS-Roformer-SW and htdemucs_ft differ by a quarter of the bass stem's energy
+    over which notes are synth and which are bass, so its file is better cut as drums,
+    bass with synths, sax and vocals.
 
     `colors` accepts a palette name, four hex colours, or a slot->colour mapping. Mixxx
     reads these out of the file, so they are what actually appears on screen.
@@ -97,6 +105,9 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
     palette = pal.resolve(colors)
     if codec not in CODEC_ARGS:
         raise ValueError(f"unknown codec {codec!r}, expected one of {', '.join(CODEC_ARGS)}")
+    names = tuple(names or NI_SLOTS)
+    if len(names) != len(NI_SLOTS):
+        raise ValueError(f"a stem file has {len(NI_SLOTS)} slots, and {len(names)} were named")
 
     folded = stem_set.to_ni_slots(merge)
     groups = folded.extra["ni_groups"]
@@ -125,7 +136,7 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
         )
 
     inject_metadata(out_path, {
-        "stems": [{"color": c, "name": n} for n, c in zip(NI_SLOTS, palette.colors)],
+        "stems": [{"color": c, "name": n} for n, c in zip(names, palette.colors)],
         "mastering_dsp": NEUTRAL_DSP,
         "version": 1,
     })

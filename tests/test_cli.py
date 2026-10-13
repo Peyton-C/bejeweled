@@ -128,6 +128,42 @@ def test_convert_refuses_what_the_input_already_is(tmp_path, capsys):
     assert "already a folder of stems" in capsys.readouterr().err
 
 
+def test_convert_names_the_slots_of_a_folder(tmp_path, monkeypatch, capsys):
+    """Stems are matched to --slots by name and keep that order in the file."""
+    import subprocess
+
+    from bejeweled import ffmpeg as ff
+    from bejeweled.cli import main
+    from bejeweled.writers import ni_stem
+
+    try:
+        ffmpeg = ff.find_ffmpeg()
+    except ff.FFmpegError:
+        pytest.skip("FFmpeg not available")
+    # An empty config, so the user's own cannot send this to their Engine library
+    monkeypatch.setenv("BEJEWELED_CONFIG", str(tmp_path / "config.toml"))
+
+    folder = tmp_path / "Song"
+    folder.mkdir()
+    for name, freq in (("drums", 110), ("Music", 220), ("sax", 440), ("vocals", 880)):
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        f"sine=frequency={freq}:duration=1:sample_rate=44100",
+                        "-ac", "2", str(folder / f"{name}.wav")], check=True)
+
+    out = str(tmp_path / "Song.stem.mp4")
+    assert main(["convert", str(folder), "--slots", "Drums,Music,Sax,Vocals", "-o", out]) == 0
+    names = [s["name"] for s in ni_stem.read_metadata(out)["stems"]]
+    assert names == ["Drums", "Music", "Sax", "Vocals"]
+
+    capsys.readouterr()
+    assert main(["convert", str(folder), "--slots", "Drums,Bass,Sax,Vocals", "-o", out]) == 1
+    assert "--slots names Drums, Bass, Sax, Vocals" in capsys.readouterr().err
+    assert main(["convert", str(folder), "--slots", "Drums,Music,Vocals", "-o", out]) == 1
+    assert "--slots takes 4 names" in capsys.readouterr().err
+    assert main(["convert", out, "--slots", "Drums,Music,Sax,Vocals"]) == 1
+    assert "is a stem file" in capsys.readouterr().err
+
+
 def test_combine_scopes_its_actions_like_a_source(parser):
     args = parser.parse_args(["combine", "graft", "clean.stem.mp4", "explicit.flac",
                               "--title", "Song", "--separator", "hybrid"])

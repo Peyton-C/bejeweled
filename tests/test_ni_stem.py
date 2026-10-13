@@ -196,3 +196,16 @@ def _count_atoms(path, wanted):
     with open(path, "rb") as f:
         data = f.read()
     return data.count(wanted + b'{"stems"') or data.count(wanted)
+
+
+def test_slots_can_be_named(stem_set, tmp_path):
+    """The names are labels only: each stem stays in the slot it was folded to."""
+    out = str(tmp_path / "named.stem.mp4")
+    ni_stem.write(stem_set, out, names=("Drums", "Music", "Sax", "Vocals"))
+
+    metadata = ni_stem.read_metadata(out)
+    assert [s["name"] for s in metadata["stems"]] == ["Drums", "Music", "Sax", "Vocals"]
+    assert [s["color"] for s in metadata["stems"]] == list(pal.DEFAULT.colors)
+
+    with pytest.raises(ValueError, match="4 slots"):
+        ni_stem.write(stem_set, out, names=("Drums", "Music", "Vocals"))
