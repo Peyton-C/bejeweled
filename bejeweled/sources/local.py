@@ -34,28 +34,46 @@ MASTER_NAMES = {"master", "mixdown", "mix", "full", "original", "full mix", "mai
 # The words a multitrack's file names use, by the slot each goes in. Checked in this
 # order, so Vocal FX is a vocal, Bass Drum a drum and Synth Bass a bass. Anything with
 # none of these words goes in Other, where most of what a name leaves unsaid belongs.
+# Drawn from 4,097 files across 181 multitracks: Fills left Drums when Jazz Bass Fills
+# turned out to be a bass part.
 SLOT_WORDS = (
     ("Vocals", {"vocal", "vocals", "voc", "vocs", "vc", "vox", "voice", "voices", "bgv", "bgvs",
-                "bv", "bvs", "adlib", "adlibs", "ad", "ads", "harm", "harmony",
-                "harmonies", "choir", "ooh", "oohs", "aah", "aahs", "chant", "chants",
-                "vocoder", "tag"}),
-    ("Drums", {"drum", "drums", "kick", "kicks", "kik", "snare", "snares", "snr", "clap",
-               "claps", "hat", "hats", "hh", "hihat", "hihats", "cymbal", "cymbals",
-               "crash", "ride", "tom", "toms", "perc", "percs", "percussion", "percusion",
-               "percy", "shaker", "shakers", "tamb", "tambourine", "rim", "rimshot",
-               "clack", "snap", "snaps", "cowbell", "conga", "congas", "bongo", "bongos",
-               "break", "breaks", "fill", "fills"}),
-    ("Bass", {"bass", "basses", "bassline", "sub", "subs", "808", "808s"}),
-    ("Other", {"synth", "synths", "keys", "keytar", "piano", "rhodes", "organ", "bells",
-               "bell", "guitar", "guitars", "gtr", "horn", "horns", "brass", "sax",
-               "trumpet", "strings", "string", "violin", "cello", "pad", "pads", "arp",
-               "lead", "leads", "melody", "chords", "pluck", "plucks", "flute", "sample",
-               "samples", "fx", "sfx", "riser", "glitch", "stab", "stabs"}),
+                "bv", "bvs", "bvox", "bg", "bgs", "ld", "dbl", "dbls", "dobls",
+                "double", "doubles", "adlib", "adlibs", "ad", "ads", "harm", "harms",
+                "harmony", "harmonies", "choir", "chrs", "gang", "uni", "unison", "ooh",
+                "oohs", "oooh", "aah", "aahs", "aaah", "yeah", "yeahs", "hey", "woo",
+                "wooo", "whisper", "rap", "chant", "chants", "vocoder", "talkbox", "vfx",
+                "tag"}),
+    ("Drums", {"drum", "drums", "drm", "kick", "kicks", "kik", "snare", "snares", "snr", "sn",
+               "clap", "claps", "hat", "hats", "hh", "hihat", "hihats", "cymbal", "cymbals",
+               "cymb", "crash", "ride", "tom", "toms", "perc", "percs", "percussion",
+               "percusion", "percy", "shaker", "shakers", "tamb", "tambourine", "triangle",
+               "timpani", "rim", "rimshot", "clack", "snap", "snaps", "cowbell", "conga",
+               "congas", "bongo", "bongos", "overheads", "beat", "beats", "break",
+               "breaks"}),
+    ("Bass", {"bass", "basses", "bassline", "subbass", "sub", "subs", "808", "808s"}),
+    # Backing on its own is a backing track, as Rock Band names it; backing vocals say so
+    ("Other", {"backing", "synth", "synths", "synt", "keys", "key", "keytar", "piano", "rhodes", "organ",
+               "moog", "prophet", "solina", "bells", "bell", "marimba", "guitar", "guitars",
+               "guit", "gtr", "horn", "horns", "brass", "sax", "trumpet", "strings",
+               "string", "violin", "viola", "cello", "pad", "pads", "arp", "arps", "lead",
+               "leads", "melody", "riff", "riffs", "solo", "chords", "pluck", "plucks",
+               "flute", "sample", "samples", "fx", "sfx", "efx", "riser", "rizer", "swell",
+               "swells", "laser", "alarm", "glitch", "stab", "stabs"}),
 )
+
+# Parts of a song, which in a multitrack name a vocal: Hook, Verse 2, Bridge Dbl. Only
+# when no word above says otherwise, since Techno Synt Chorus is a synth.
+SECTION_WORDS = {"hook", "hooks", "verse", "verses", "bridge", "chorus", "prechorus", "pre",
+                 "intro", "outro"}
 
 # A multitrack sometimes ships with the acapella or instrumental bounced from it, and
 # summing either with the stems would play that part twice
-BOUNCE_WORDS = {"acapella", "acappella", "accapella", "instrumental", "instrumentals"}
+BOUNCE_WORDS = {"acapella", "acappella", "accapella", "cappella", "instrumental",
+                "instrumentals"}
+
+# What marks the explicit one of a clean and explicit pair of the same stem
+EXPLICIT_WORDS = {"dirty", "explicit"}
 
 SKIP = "skip"
 
@@ -175,6 +193,8 @@ def from_multitrack(files, title: str, artist: str | None = None, master: str | 
 
 
 def _words(name: str) -> list[str]:
+    # A capital after a lower case letter starts a word, as in mainBASS and IndPerc
+    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
     return re.findall(r"[a-z]+|\d+", name.lower())
 
 
@@ -182,6 +202,8 @@ def _slot_by_words(words: list[str]) -> str | None:
     for slot, vocabulary in SLOT_WORDS:
         if vocabulary.intersection(words):
             return slot
+    if SECTION_WORDS.intersection(words):
+        return "Vocals"
     return None
 
 
@@ -194,8 +216,19 @@ def _left_out(name: str, words: dict[str, list[str]], count: int) -> str | None:
         if twin:
             # 7 rings ships Ld Voc beside Ld Voc Dry, the same take before its effects
             return f"a dry copy of {twin}"
+    explicit = next((other for other, theirs in words.items()
+                     if theirs != own and sorted(w for w in theirs
+                                                 if w not in EXPLICIT_WORDS) ==
+                     sorted(w for w in own if w != "clean")), None)
+    if explicit and not EXPLICIT_WORDS.intersection(own):
+        # good 4 u from Rock Band has Vocals beside Vocals (Dirty), and both would sing
+        return f"the clean twin of {explicit}"
     if count > 1 and BOUNCE_WORDS.intersection(own):
         return "a bounce of the stems beside it"
+    if name.strip().lower() == "crowd":
+        # Rock Band's audience, singing along. Elsewhere a crowd is in the song, as Dua
+        # Lipa's 38 CROWD and Zedd's Crowd - 5B are, and is named more than this
+        return "Rock Band's audience, not the song"
     return None
 
 

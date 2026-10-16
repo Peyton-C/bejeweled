@@ -25,14 +25,14 @@ bejeweled places each file by the words in its name, and prints where every one 
 
 | Slot | Words, for example |
 | --- | --- |
-| Vocals | vocal, voc, vox, BGV, adlib, harm, choir, oohs, tag |
-| Drums | drum, kick, snare, clap, hat, HH, cymbal, crash, ride, tom, perc |
+| Vocals | vocal, voc, vox, Ld, BGV, BVox, Dbl, adlib, harm, choir, gang, talkbox, VFX, tag |
+| Drums | drum, kick, snare, clap, hat, HH, cymbal, crash, ride, tom, perc, beat |
 | Bass | bass, sub, 808 |
-| Other | synth, keys, piano, guitar, horns, strings, pad, FX, sample, anything else |
+| Other | synth, keys, piano, guitar, horns, strings, pad, riff, FX, sample, anything else |
 
-A name with words for two slots goes to the first slot in this table, so Vocal FX is a vocal and Synth Bass is bass.
+A name with words for two slots goes to the first slot in this table, so Vocal FX is a vocal and Synth Bass is bass. A part of the song, hook, verse, bridge, chorus, intro or outro, is a vocal when nothing else in the name says what it is, so Hook Dbl is a vocal and Techno Synth Chorus a synth. Words run together are split at a capital, so mainBASS is bass.
 
-A dry copy of a stem beside the stem itself, `Ld Voc Dry` beside `Ld Voc`, is left out, and so is an acapella or instrumental bounced from the stems, since either would play that part twice. A file named Master or Mix is the mixdown.
+A dry copy of a stem beside the stem itself, `Ld Voc Dry` beside `Ld Voc`, is left out, and so is an acapella or instrumental bounced from the stems, since either would play that part twice. Of a clean and an explicit take of the same stem, `Vocals` beside `Vocals (Dirty)`, bejeweled keeps the explicit one, assign the other to its slot and skip this one to swap them. Rock Band's audience track, named `crowd`, is left out too. A file named Master or Mix is the mixdown.
 
 The title is the folder's name without the word Stems. Pass `--title` and `--artist` when the folder does not say, as without an artist no cover art is found.
 

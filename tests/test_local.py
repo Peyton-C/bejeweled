@@ -46,6 +46,23 @@ def test_a_multitrack_is_placed_by_the_words_in_its_names(folder):
     assert [len(groups[slot]) for slot in NI_SLOTS] == [3, 3, 2, 4]
 
 
+@pytest.mark.parametrize("name, slot", [
+    # A part of the song names a vocal, unless an instrument is named beside it
+    ("Hook Dbl 2", "Vocals"),
+    ("Bridge Whisper", "Vocals"),
+    ("techno synt chorus +3", "Other"),
+    ("RAK Chorus Viola", "Other"),
+    ("PreChorus DRM Loop", "Drums"),
+    # Words run together are split at a capital
+    ("bb-mainBASS", "Bass"),
+    ("IndPerc -GP1- Stem", "Drums"),
+    ("43 BASS Jazz Bass Fills", "Bass"),
+    ("Beat Voc Stem", "Vocals"),
+])
+def test_names_from_real_multitracks_land_in_their_slot(name, slot):
+    assert local._slot_by_words(local._words(name)) == slot
+
+
 def test_a_name_with_no_known_word_goes_in_other_and_is_reported(folder):
     s = local.from_folder(folder("Kick.wav", "Bass.wav", "Vocals.wav", "Loops.wav",
                                  "Bird.wav"))
@@ -58,6 +75,22 @@ def test_dry_copies_and_bounces_are_left_out(folder):
                                  "Ld Voc Dry Stem.wav", "ACAPELLA.mp3"))
     assert set(s.extra["skipped"]) == {"Ld Voc Dry Stem", "ACAPELLA"}
     assert "Ld Voc Dry Stem" not in s.names()
+
+
+def test_rock_band_tracks_are_placed_and_its_extras_left_out(folder):
+    s = local.from_folder(folder("Backing.flac", "Bass.flac", "drums_kick.flac",
+                                 "drums_snare.flac", "drums_kit.flac", "Guitar.flac",
+                                 "keys.flac", "Vocals.flac", "Vocals (Dirty).flac",
+                                 "crowd.flac"))
+    slots = s.extra["slots"]
+    assert (slots["Backing"], slots["drums_kit"], slots["keys"]) == ("Other", "Drums", "Other")
+    assert slots["Vocals (Dirty)"] == "Vocals"
+    assert set(s.extra["skipped"]) == {"Vocals", "crowd"}
+    assert s.extra["unsorted"] == []
+    # A crowd that is part of the song is named more than that, and stays
+    s = local.from_folder(folder("Kick.wav", "Bass.wav", "Vocals.wav", "38 CROWD_1.wav",
+                                 name="Physical"))
+    assert "38 CROWD_1" in s.extra["slots"]
 
 
 def test_assign_overrides_the_names_and_can_skip(folder):
