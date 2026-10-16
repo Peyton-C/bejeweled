@@ -5,7 +5,9 @@ a separation tool - so the writers can be used without a ripper involved.
 """
 from __future__ import annotations
 
+import fnmatch
 import os
+import re
 
 from .. import ffmpeg as ff
 from ..stems import NI_SLOTS, Stem, StemSet
@@ -27,54 +29,187 @@ ALIASES = {
     "vocals": "Vocals", "vocal": "Vocals", "vox": "Vocals", "voice": "Vocals",
 }
 
-MASTER_NAMES = {"master", "mixdown", "mix", "full", "original"}
+MASTER_NAMES = {"master", "mixdown", "mix", "full", "original", "full mix", "main mix"}
+
+# The words a multitrack's file names use, by the slot each goes in. Checked in this
+# order, so Vocal FX is a vocal, Bass Drum a drum and Synth Bass a bass. Anything with
+# none of these words goes in Other, where most of what a name leaves unsaid belongs.
+SLOT_WORDS = (
+    ("Vocals", {"vocal", "vocals", "voc", "vocs", "vc", "vox", "voice", "voices", "bgv", "bgvs",
+                "bv", "bvs", "adlib", "adlibs", "ad", "ads", "harm", "harmony",
+                "harmonies", "choir", "ooh", "oohs", "aah", "aahs", "chant", "chants",
+                "vocoder", "tag"}),
+    ("Drums", {"drum", "drums", "kick", "kicks", "kik", "snare", "snares", "snr", "clap",
+               "claps", "hat", "hats", "hh", "hihat", "hihats", "cymbal", "cymbals",
+               "crash", "ride", "tom", "toms", "perc", "percs", "percussion", "percusion",
+               "percy", "shaker", "shakers", "tamb", "tambourine", "rim", "rimshot",
+               "clack", "snap", "snaps", "cowbell", "conga", "congas", "bongo", "bongos",
+               "break", "breaks", "fill", "fills"}),
+    ("Bass", {"bass", "basses", "bassline", "sub", "subs", "808", "808s"}),
+    ("Other", {"synth", "synths", "keys", "keytar", "piano", "rhodes", "organ", "bells",
+               "bell", "guitar", "guitars", "gtr", "horn", "horns", "brass", "sax",
+               "trumpet", "strings", "string", "violin", "cello", "pad", "pads", "arp",
+               "lead", "leads", "melody", "chords", "pluck", "plucks", "flute", "sample",
+               "samples", "fx", "sfx", "riser", "glitch", "stab", "stabs"}),
+)
+
+# A multitrack sometimes ships with the acapella or instrumental bounced from it, and
+# summing either with the stems would play that part twice
+BOUNCE_WORDS = {"acapella", "acappella", "accapella", "instrumental", "instrumentals"}
+
+SKIP = "skip"
 
 
 def from_folder(folder: str, title: str | None = None, artist: str | None = None,
-                names=None) -> StemSet:
+                names=None, assign=None) -> StemSet:
     """Build a StemSet from a folder of separate stem files.
 
     File names are matched case-insensitively against the common stem names, so both
-    `Drums.wav` and `04_vocals.flac` land in the right slot. Anything unrecognised is
-    kept under its own name rather than dropped, and folding happens at write time.
+    `Drums.wav` and `04_vocals.flac` land in the right slot.
 
     With `names`, the stems the caller expects, a file is matched by its whole name
     against those alone. The common names would get in the way: they match anywhere in
     a name, so a slot called Bass Synths would have its file read as Bass.
+
+    A folder that is not one file per slot is a multitrack, read as `from_multitrack`
+    reads it. `assign` always makes it one, since it places files by hand.
     """
     if not os.path.isdir(folder):
         raise FileNotFoundError(f"no such folder: {folder}")
 
-    stems, master = [], None
+    files, master = [], None
     for entry in sorted(os.listdir(folder)):
         path = os.path.join(folder, entry)
         if not os.path.isfile(path) or os.path.splitext(entry)[1].lower() not in AUDIO_EXTENSIONS:
             continue
-
-        stem_name = os.path.splitext(entry)[0].lower()
-        if stem_name in MASTER_NAMES:
+        if os.path.splitext(entry)[0].lower() in MASTER_NAMES:
             master = path
-            continue
-
-        if names:
-            matched = next((name for name in names if name.lower() == stem_name),
-                           os.path.splitext(entry)[0])
         else:
-            matched = next(
-                (slot for alias, slot in ALIASES.items() if alias in stem_name),
-                os.path.splitext(entry)[0],
-            )
-        stems.append(Stem(name=matched, path=path))
+            files.append((os.path.splitext(entry)[0], path))
 
-    if not stems:
+    if not files:
         raise ValueError(f"no stem audio found in {folder}")
 
-    return StemSet(
-        title=title or os.path.basename(os.path.normpath(folder)),
-        artist=artist,
-        stems=stems,
-        master=master,
-    )
+    title = title or folder_title(folder)
+    if names and not assign:
+        stems = [Stem(name=next((n for n in names if n.lower() == name.lower()), name),
+                      path=path) for name, path in files]
+    else:
+        stems = None if assign else _one_per_slot(files)
+    if stems is None:
+        return from_multitrack(files, title, artist=artist, master=master, names=names,
+                               assign=assign)
+    return StemSet(title=title, artist=artist, stems=stems, master=master)
+
+
+def _one_per_slot(files) -> list[Stem] | None:
+    """The stems of a folder holding one file per slot, or None for anything else."""
+    stems = [Stem(name=next((slot for alias, slot in ALIASES.items()
+                             if alias in name.lower()), name), path=path)
+             for name, path in files]
+    found = [stem.name for stem in stems]
+    if set(found) <= {*NI_SLOTS, "Lead"} and len(set(found)) == len(found):
+        return stems
+    return None
+
+
+def from_multitrack(files, title: str, artist: str | None = None, master: str | None = None,
+                    names=None, assign=None) -> StemSet:
+    """Build a StemSet from a multitrack's many stems, each placed in a slot.
+
+    Every file stays a stem of its own under its own name, and `extra["slots"]` says
+    which slot it sums into when the set is written. Names decide the slot, by the
+    words in `SLOT_WORDS`, and `assign` overrides them: (pattern, slot) pairs, where
+    the pattern is a file's name or a glob of it and the slot may be `skip`.
+
+    With `names`, the slots are the caller's own and the words cannot say which of
+    them is which, so every file must be assigned.
+    """
+    targets = list(names or NI_SLOTS)
+    by_name = {target.lower(): target for target in targets}
+    rules = []
+    for pattern, target in assign or ():
+        if target.lower() != SKIP and target.lower() not in by_name:
+            raise ValueError(f"{pattern}={target}: the slots are {', '.join(targets)} "
+                             f"or {SKIP}")
+        if not any(fnmatch.fnmatch(name.lower(), pattern.lower()) for name, _ in files):
+            raise ValueError(f"{pattern} matches none of {', '.join(n for n, _ in files)}")
+        rules.append((pattern.lower(), target.lower()))
+
+    words = {name: _words(name) for name, _ in files}
+    stems, slots, unsorted, skipped, unplaced = [], {}, [], {}, []
+    for name, path in files:
+        chosen = next((target for pattern, target in reversed(rules)
+                       if fnmatch.fnmatch(name.lower(), pattern)), None)
+        if chosen == SKIP:
+            skipped[name] = "assigned to skip"
+            continue
+        if chosen is None:
+            reason = _left_out(name, words, len(files))
+            if reason:
+                skipped[name] = reason
+                continue
+        if chosen is not None:
+            # A named slot is written in the place of the NI slot at its position
+            slot = NI_SLOTS[targets.index(by_name[chosen])]
+        elif names:
+            unplaced.append(name)
+            continue
+        else:
+            slot = _slot_by_words(words[name])
+            if slot is None:
+                slot = "Other"
+                unsorted.append(name)
+        stems.append(Stem(name=name, path=path))
+        slots[name] = slot
+
+    if unplaced:
+        raise ValueError(f"with --slots, every file of a multitrack is placed with "
+                         f"--assign, and {', '.join(unplaced)} "
+                         f"{'is' if len(unplaced) == 1 else 'are'} not")
+    if not stems:
+        raise ValueError("every file was left out")
+    return StemSet(title=title, artist=artist, stems=stems, master=master,
+                   extra={"slots": slots, "unsorted": unsorted, "skipped": skipped,
+                          "slot_names": dict(zip(NI_SLOTS, targets))})
+
+
+def _words(name: str) -> list[str]:
+    return re.findall(r"[a-z]+|\d+", name.lower())
+
+
+def _slot_by_words(words: list[str]) -> str | None:
+    for slot, vocabulary in SLOT_WORDS:
+        if vocabulary.intersection(words):
+            return slot
+    return None
+
+
+def _left_out(name: str, words: dict[str, list[str]], count: int) -> str | None:
+    """Why a multitrack's file should not be summed with the rest, if it should not."""
+    own = words[name]
+    if "dry" in own:
+        wet = [w for w in own if w != "dry"]
+        twin = next((other for other, theirs in words.items() if theirs == wet), None)
+        if twin:
+            # 7 rings ships Ld Voc beside Ld Voc Dry, the same take before its effects
+            return f"a dry copy of {twin}"
+    if count > 1 and BOUNCE_WORDS.intersection(own):
+        return "a bounce of the stems beside it"
+    return None
+
+
+def folder_title(folder: str) -> str:
+    """A folder's name without the word stems, which titles a download, not the song.
+
+    `AG_Greedy [Stems]` and `Get Into It (Yuh) Stems + Acapella` are how multitracks
+    arrive.
+    """
+    name = os.path.basename(os.path.normpath(folder))
+    name = re.sub(r"\s*[\[(][^\])]*\b(stems?|multi ?tracks?)\b[^\])]*[\])]", "", name,
+                  flags=re.IGNORECASE)
+    name = re.sub(r"\s+(stems?|multi ?tracks?)\b.*$", "", name, flags=re.IGNORECASE)
+    return name.strip() or os.path.basename(os.path.normpath(folder))
 
 
 def is_stem_file(path: str) -> bool:

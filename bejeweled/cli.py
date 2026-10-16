@@ -147,6 +147,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("--slots", help="what a folder's four stems are, in order, when "
                                         "they are not drums, bass, other and vocals, "
                                         "e.g. Drums,Music,Sax,Vocals")
+    p_conv.add_argument("--assign", action="append", metavar="NAME=SLOT",
+                        help="put a folder's file in a slot, or skip it, overriding "
+                             "what its name says; NAME may be a glob, e.g. 'BGV*=Vocals'. "
+                             "Repeat for more")
+    p_conv.add_argument("--title", help="the title, for one folder (default: the "
+                                        "folder's name)")
+    p_conv.add_argument("--artist", help="the artist, for one folder")
+    p_conv.add_argument("--no-cover", action="store_true",
+                        help="do not look up cover art for a folder")
     p_conv.add_argument("--suffix", help="appended to the title, e.g. '(ENGINE)'")
     p_conv.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
@@ -252,8 +261,26 @@ def _report(written, wrote_track=True) -> None:
         print(f"wrote {len(written.stem_set.stems)} stems to {written.path}")
     elif wrote_track:
         print(f"wrote {written.path}")
+    _report_multitrack(written.stem_set)
     if written.engine_stems:
         print(f"wrote {written.engine_stems}")
+
+
+def _report_multitrack(stem_set) -> None:
+    """Which file went where, so a name read wrongly can be put right with --assign."""
+    slots = stem_set.extra.get("slots")
+    if not slots:
+        return
+    labels = stem_set.extra.get("slot_names") or {}
+    unsorted = set(stem_set.extra.get("unsorted", ()))
+    for slot in NI_SLOTS:
+        members = [f"{name}?" if name in unsorted else name
+                   for name, into in slots.items() if into == slot]
+        print(f"  {labels.get(slot, slot):<8} {', '.join(members) or '-'}")
+    for name, why in stem_set.extra.get("skipped", {}).items():
+        print(f"  left out {name}, {why}")
+    if unsorted:
+        print("  ? names nothing bejeweled recognises, so went in Other")
 
 
 def _separate(args) -> int:
@@ -430,6 +457,8 @@ def _list(args) -> int:
 def _convert(args) -> int:
     if args.out and len(args.inputs) > 1:
         raise ValueError("-o names one output, so it takes one input")
+    if (args.title or args.artist) and len(args.inputs) > 1:
+        raise ValueError("--title and --artist name one song, so they take one input")
     if args.jobs is not None and args.jobs < 1:
         raise ValueError("--jobs is at least 1")
 
@@ -480,15 +509,29 @@ def _slots(spec: str | None):
     return names
 
 
+def _assignments(specs):
+    """The (name, slot) pairs --assign gives."""
+    pairs = []
+    for spec in specs or ():
+        name, sep, slot = spec.rpartition("=")
+        if not sep or not name.strip() or not slot.strip():
+            raise ValueError(f"--assign takes NAME=SLOT, such as 'Loops=Drums', not {spec!r}")
+        pairs.append((name.strip(), slot.strip()))
+    return pairs
+
+
 def _convert_one(target, args, cfg):
     """Convert one input, returning what was written and whether the track itself was."""
     from .sources import local
 
     names = _slots(args.slots)
+    assign = _assignments(args.assign)
     if local.is_stem_file(target):
-        if names:
-            raise ValueError("--slots names a folder's stems, and "
-                             f"{os.path.basename(target)} is a stem file")
+        for flag, given in (("--slots", names), ("--assign", assign),
+                            ("--title", args.title), ("--artist", args.artist)):
+            if given:
+                raise ValueError(f"{flag} is for a folder of stems, and "
+                                 f"{os.path.basename(target)} is a stem file")
         if args.format == "ni-stem":
             raise ValueError(f"{os.path.basename(target)} is already a stem file")
         if args.format == "files":
@@ -501,8 +544,10 @@ def _convert_one(target, args, cfg):
     fmt = args.format or cfg.get("output", {}).get("format")
     engine = jobs.engine_target(fmt if fmt == "engine" else "ni-stem", cfg,
                                 args.engine_library, args.engine_key)
-    stem_set = local.from_folder(target, names=names)
-    if names:
+    stem_set = local.from_folder(target, title=args.title, artist=args.artist, names=names,
+                                 assign=assign)
+    slots = stem_set.extra.get("slots")
+    if names and not slots:
         missing = [name for name in names if not stem_set.get(name)]
         unnamed = [name for name in stem_set.names() if name not in names]
         if missing or unnamed:
@@ -519,19 +564,15 @@ def _convert_one(target, args, cfg):
         os.path.dirname(os.path.normpath(target)) or ".",
         f"{jobs.safe(stem_set.title)}.stem.mp4",
     )
-    if names:
+    if slots:
+        merge = slots
+    elif names:
         # Each named stem to the slot in its position, whatever that slot is called
         merge = dict(zip(names, NI_SLOTS))
     else:
         merge = {"Lead": "Other"} if stem_set.get("Lead") else None
-    ni_stem.write(
-        stem_set, out_path,
-        codec=args.codec or cfg.get("output", {}).get("codec", "aac"),
-        sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
-        merge=merge,
-        colors=_colors(args, cfg),
-        names=names,
-    )
+    jobs.write_ni(stem_set, out_path, cfg, merge=merge, codec=args.codec,
+                  palette=args.palette, names=names, find_cover=not args.no_cover)
     stems = engine and jobs.write_engine(stem_set, out_path, engine, merge)
     return jobs.Written(out_path, stem_set, stems), True
 

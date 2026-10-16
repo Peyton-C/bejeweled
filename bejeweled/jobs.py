@@ -43,14 +43,43 @@ def colors(spec: str | None, cfg: dict):
 
 def _write_ni(stem_set: StemSet, out_dir: str, cfg: dict, merge, codec, palette) -> str:
     out_path = os.path.join(out_dir, f"{safe(stem_set.title)}.stem.mp4")
-    ni_stem.write(
-        stem_set, out_path,
-        codec=codec or cfg.get("output", {}).get("codec", "aac"),
-        sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
-        merge=merge,
-        colors=colors(palette, cfg),
-    )
+    write_ni(stem_set, out_path, cfg, merge=merge, codec=codec, palette=palette)
     return out_path
+
+
+def write_ni(stem_set: StemSet, out_path: str, cfg: dict, *, merge=None, codec=None,
+             palette=None, names=None, find_cover: bool = True) -> str:
+    """Write the stem file, looking up cover art first when the set has none."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="bejeweled-cover-") as work:
+        found = None
+        if (find_cover and not stem_set.cover
+                and cfg.get("metadata", {}).get("find_cover", True)):
+            from . import artwork
+            found = artwork.find(stem_set.artist, stem_set.title, work)
+        stem_set.cover = found or stem_set.cover
+        try:
+            ni_stem.write(
+                stem_set, out_path,
+                codec=codec or cfg.get("output", {}).get("codec", "aac"),
+                sample_rate=cfg.get("output", {}).get("sample_rate", 44100),
+                merge=merge,
+                colors=colors(palette, cfg),
+                names=names,
+            )
+        finally:
+            if found:
+                stem_set.cover = None
+    return out_path
+
+
+def _four_stems(stem_set: StemSet, folder: str) -> StemSet:
+    """Refuse a multitrack where a combine needs one stem per slot."""
+    if stem_set.extra.get("slots"):
+        raise ValueError(f"{folder} is a multitrack, `bejeweled convert` it to a stem "
+                         "file first and give that instead")
+    return stem_set
 
 
 def _format(fmt: str | None, cfg: dict) -> str:
@@ -329,7 +358,7 @@ def graft_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | No
             clean.cover = cover
             unpacked = [s.path for s in clean.stems]
         else:
-            clean = local.from_folder(stems)
+            clean = _four_stems(local.from_folder(stems), stems)
             unpacked = []
         clean.require(combine.GRAFT_STEM)
 
@@ -428,7 +457,7 @@ def extend_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | N
             given.cover = cover
             unpacked = [s.path for s in given.stems]
         else:
-            given = local.from_folder(stems)
+            given = _four_stems(local.from_folder(stems), stems)
             unpacked = []
         stem_set = combine.extend(
             given, mix, work, separator=separator,

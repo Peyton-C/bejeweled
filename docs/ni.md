@@ -13,6 +13,29 @@ The 4 stems are always in the same order, and Other is the slot for melody, inst
 
 A source that provides more parts than this is folded down when the file is written, so nothing is lost, it is only summed.
 
+## Multitracks
+`bejeweled convert` builds a stem file from a folder of a song's many stems, a kick, three snares and nine backing vocals, as readily as from a folder of four.
+
+```sh
+bejeweled convert "./Greedy [Stems]/" --artist "Ariana Grande"
+bejeweled convert "./Greedy [Stems]/" --assign Loops=Drums --assign "BGV*=Vocals"
+```
+
+bejeweled places each file by the words in its name, and prints where every one went. A name with none of the words it knows goes in Other and is marked with a `?` in that list. Check those, and move any that are wrong with `--assign`, which takes a file's name or a glob of it and a slot, or `skip` to leave the file out.
+
+| Slot | Words, for example |
+| --- | --- |
+| Vocals | vocal, voc, vox, BGV, adlib, harm, choir, oohs, tag |
+| Drums | drum, kick, snare, clap, hat, HH, cymbal, crash, ride, tom, perc |
+| Bass | bass, sub, 808 |
+| Other | synth, keys, piano, guitar, horns, strings, pad, FX, sample, anything else |
+
+A name with words for two slots goes to the first slot in this table, so Vocal FX is a vocal and Synth Bass is bass.
+
+A dry copy of a stem beside the stem itself, `Ld Voc Dry` beside `Ld Voc`, is left out, and so is an acapella or instrumental bounced from the stems, since either would play that part twice. A file named Master or Mix is the mixdown.
+
+The title is the folder's name without the word Stems. Pass `--title` and `--artist` when the folder does not say, as without an artist no cover art is found.
+
 ## Slot names
 The four slots suit most songs, but not one whose hook is an instrument that would otherwise be buried in Other. `bejeweled convert` can name the slots itself when it builds a stem file from a folder.
 
@@ -20,7 +43,7 @@ The four slots suit most songs, but not one whose hook is an instrument that wou
 bejeweled convert ./my-stems/ --slots Drums,Music,Sax,Vocals
 ```
 
-bejeweled matches each name to the file of that name in the folder, and writes them in the order given. The folder must hold exactly those four stems, beside the mixdown if there is one.
+bejeweled matches each name to the file of that name in the folder, and writes them in the order given. The folder must hold exactly those four stems, beside the mixdown if there is one. A multitrack can have named slots too, but its words cannot say which named slot a file belongs in, so `--assign` must place every file.
 
 The names are labels. A player still treats the slots as drums, bass, other and vocals wherever it goes by position, and Engine DJ, which has no names of its own to change, always does.
 
@@ -44,6 +67,8 @@ bejeweled can also restyle existing stem files, including ones it did not create
 
 ## Metadata
 bejeweled writes the title, artist, year, key, BPM, cover art and a provenance comment into the file. Tags a source does not provide are left out rather than guessed at.
+
+A song that arrives without cover art, a YouTube mix or a folder of stems, gets the cover of its release from iTunes, or from Deezer when iTunes has none. bejeweled takes a cover only when both the artist and the title match, so a song with no artist tag gets none. Set `find_cover = false` under `[metadata]` to turn this off, or pass `--no-cover` to `convert`.
 
 Where bejeweled obtained the audio rather than the user, the title also gets a marker, `(FN)` for Fortnite Festival. Mixes of the same song can differ between platforms, so the marker keeps them apart in a library instead of letting one quietly stand in for the other.
 

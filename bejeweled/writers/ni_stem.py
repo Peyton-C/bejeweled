@@ -118,7 +118,8 @@ def write(stem_set: StemSet, out_path: str, codec: str = "aac", sample_rate: int
 
         master = stem_set.master
         if not master:
-            master = ff.mix(ffmpeg, slot_paths, os.path.join(work, "master.wav"))
+            master = ff.mix(ffmpeg, slot_paths, os.path.join(work, "master.wav"),
+                            codec_args=["-c:a", "pcm_f32le"])
 
         tags = stem_set.tags()
         # FFmpeg drops these two for MP4, so they are written as atoms afterwards
@@ -151,7 +152,10 @@ def slot_files(ffmpeg: str, groups: dict, work: str) -> dict[str, str]:
             paths[slot] = members[0].path
         else:
             paths[slot] = os.path.join(work, f"{slot.lower()}.wav")
-            ff.mix(ffmpeg, [m.path for m in members], paths[slot])
+            # Float, since a multitrack's twenty stems can sum past full scale and
+            # FFmpeg's default WAV is 16-bit
+            ff.mix(ffmpeg, [m.path for m in members], paths[slot],
+                   codec_args=["-c:a", "pcm_f32le"])
     return paths
 
 

@@ -51,6 +51,8 @@ backgrounds = ["#1E1E1E"]
 [metadata]
 # Record which tool and which source produced the file, in the comment field.
 write_comment = true
+# Look up cover art on iTunes, then Deezer, for a song that arrives without any.
+find_cover = true
 
 [separate]
 # roformer is the cleanest. hybrid is a little less clean but never lost to demucs
