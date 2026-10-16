@@ -94,6 +94,21 @@ def build_parser() -> argparse.ArgumentParser:
                                           "such as '(+RF)'")
     c_graft.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
+    c_ext = comb.add_parser("extend", help="lay real stems along another version of the "
+                                           "song, such as an extended mix")
+    c_ext.add_argument("stems", help="a .stem.mp4 or a folder of stems")
+    c_ext.add_argument("mix", help="the other version, as an ordinary mixed song")
+    _add_output_options(c_ext)
+    c_ext.add_argument("--title", help="the title to give the result (default: the "
+                                       "mix's title tag, or its file name)")
+    c_ext.add_argument("--separator", choices=list(SEPARATORS),
+                       help=f"what separates what only the mix has (default: {DEFAULT_SEPARATOR})")
+    c_ext.add_argument("--model", help="demucs model, for demucs and the hybrid")
+    c_ext.add_argument("--device", help="demucs's device: cpu, cuda or mps")
+    c_ext.add_argument("--suffix", help="appended to the title instead of a marker "
+                                        "such as '(+RF)'")
+    c_ext.add_argument("--no-suffix", action="store_true", help="never append a suffix")
+
     c_asm = comb.add_parser("assemble", help="build stems from a song's mix, instrumental "
                                              "and acapella, any two or all three")
     c_asm.add_argument("--mix", help="the full song")
@@ -162,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "festival":
         handler = {"rip": _rip, "list": _list}[args.action]
     elif args.command == "combine":
-        handler = {"graft": _graft, "assemble": _assemble}[args.action]
+        handler = {"graft": _graft, "extend": _extend, "assemble": _assemble}[args.action]
     else:
         handler = {
             "separate": _separate, "convert": _convert, "recolor": _recolor,
@@ -338,6 +353,31 @@ def _graft(args) -> int:
         # Printed because nothing was done there, and it may be an edit worth checking
         print(f"  left alone, only in the stems: "
               f"{' '.join(_clock(w.start) for w in report.only_clean)}")
+
+    _report(written)
+    return 0
+
+
+def _extend(args) -> int:
+    cfg = config.load()
+    written = jobs.extend_file(
+        args.stems, args.mix, args.out, cfg, title=args.title, separator=args.separator,
+        model=args.model, device=args.device, suffix=args.suffix, no_suffix=args.no_suffix,
+        fmt=args.format, codec=args.codec, palette=args.palette,
+        engine_library=args.engine_library, engine_key=args.engine_key, progress=_stages(),
+    )
+    print()
+
+    report = written.stem_set.extra["extension"]
+    print("  " + ", ".join(f"{p.kind} {_clock(p.start)}-{_clock(p.end)}"
+                           for p in report.pieces))
+    if report.dropped:
+        # Printed because the stems had it and the file does not
+        print(f"  only in the stems, left out: "
+              f"{' '.join(f'{_clock(w.start)}-{_clock(w.end)}' for w in report.dropped)}")
+    if report.separated:
+        print(f"  seams on a {report.bpm:.1f} BPM grid" if report.bpm
+              else "  no steady beat found, seams where the versions part")
 
     _report(written)
     return 0

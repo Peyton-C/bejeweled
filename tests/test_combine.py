@@ -491,3 +491,223 @@ def test_the_assembly_job_names_a_folder_after_the_song(parts, splitter, tmp_pat
     assert os.path.basename(written.path) == "Song - stems"
     assert sorted(os.listdir(written.path)) == [
         "Bass.wav", "Drums.wav", "Master.wav", "Other.wav", "Vocals.wav"]
+
+
+# -------------------------------------------------------------------------- extend
+
+BEAT = 0.5           # 120 BPM
+CUT = (16.0, 20.0)   # what the other version leaves out of the stems
+NEW = 8.0            # and the stretch it has in that place instead
+LEAD = 0.3           # silence before it starts
+OTHER_GAIN = 0.8
+
+
+def _band(seed, seconds, start_beat=0):
+    """Four stems on a 120 BPM grid that never repeat, so there is only one place
+    any stretch of them lines up: a kick on every beat at a level of its own, a bass
+    note per beat, noise, and words."""
+    rng = np.random.default_rng(seed)
+    length = int(seconds * RATE)
+    t = np.arange(length) / RATE
+    drums, bass = np.zeros(length), np.zeros(length)
+    for beat in range(int(seconds / BEAT)):
+        start, size = int(beat * BEAT * RATE), int(0.2 * RATE)
+        hit = rng.standard_normal(size) * np.exp(-np.arange(size) / (0.03 * RATE))
+        drums[start:start + size] += 0.5 * rng.uniform(0.6, 1.0) * hit
+        end = min(length, start + int(BEAT * RATE))
+        bass[start:end] = 0.2 * np.sin(2 * np.pi * rng.uniform(40, 90) * t[start:end])
+    other = 0.03 * rng.standard_normal(length)
+    vocals = np.zeros(length)
+    for index in range(int(seconds * 2)):
+        start, size = int(index * 0.5 * RATE), int(0.4 * RATE)
+        vocals[start:start + size] = _word(rng, rng.uniform(180, 600), size)
+    return {name: np.stack([x, x], axis=1).astype(np.float32)
+            for name, x in (("Drums", drums), ("Bass", bass), ("Other", other),
+                            ("Vocals", vocals))}
+
+
+@pytest.fixture(scope="module")
+def band():
+    return _band(11, SECONDS)
+
+
+@pytest.fixture(scope="module")
+def extended(band):
+    """The other version: a lead-in, the song up to the cut, eight new seconds in its
+    place, then the rest, all quieter."""
+    song = sum(band.values())
+    new = sum(_band(12, NEW).values())
+    a, b = (int(s * RATE) for s in CUT)
+    lead = np.zeros((int(LEAD * RATE), 2), dtype=np.float32)
+    return np.concatenate([lead, song[:a], new, song[b:]]) * OTHER_GAIN
+
+
+@pytest.fixture
+def band_files(band, extended, ffmpeg, tmp_path):
+    folder = tmp_path / "Song (FN)"
+    folder.mkdir()
+    paths = {name: combine._encode(ffmpeg, audio, RATE, str(folder / f"{name}.wav"))
+             for name, audio in band.items()}
+    paths["master"] = combine._encode(ffmpeg, sum(band.values()), RATE,
+                                      str(folder / "Master.wav"))
+    paths["extended"] = combine._encode(ffmpeg, extended, RATE,
+                                        str(tmp_path / "Song (Extended).wav"))
+    paths["folder"] = str(folder)
+    return paths
+
+
+def _band_set(band_files):
+    return StemSet(title="Song (FN)", master=band_files["master"], bpm=120.0,
+                   stems=[Stem(n, band_files[n]) for n in ("Drums", "Bass", "Other", "Vocals")])
+
+
+def test_the_grid_is_found_on_the_beat(band):
+    period, phase = combine.beat_grid(band["Drums"], RATE)
+    assert 60 / period == pytest.approx(120, abs=0.05)
+    assert min(phase % BEAT, BEAT - phase % BEAT) < 0.005
+
+
+def test_noise_has_no_grid():
+    noise = np.random.default_rng(5).standard_normal((SECONDS * RATE, 2)).astype(np.float32)
+    assert combine.beat_grid(noise, RATE) is None
+
+
+def test_the_layout_follows_the_other_version(band, extended):
+    song = sum(band.values())
+    grid = combine.beat_grid(band["Drums"], RATE, 120.0)
+    layout = [(s / RATE, e / RATE, None if o is None else o / RATE)
+              for s, e, o in combine.lay_out(song, extended, RATE, grid)]
+    first, gap, second = CUT[0] + LEAD, CUT[0] + LEAD + NEW, len(extended) / RATE
+    expected = [(0, LEAD, None), (LEAD, first, LEAD), (first, gap, None),
+                (gap, second, LEAD + NEW - (CUT[1] - CUT[0]))]
+    assert len(layout) == len(expected)
+    for (s, e, o), (want_s, want_e, want_o) in zip(layout, expected):
+        assert s == pytest.approx(want_s, abs=1e-3) and e == pytest.approx(want_e, abs=1e-3)
+        assert o == want_o or o == pytest.approx(want_o, abs=1 / RATE)
+
+
+def test_the_weights_cross_on_each_seam():
+    weights = combine._weights([100, 300], 400, 10)
+    assert np.allclose(sum(weights), 1)
+    assert weights[0][89] == 1 and weights[0][100] == 0 and weights[1][100] == 1
+
+
+@pytest.fixture
+def stand_in(ffmpeg, monkeypatch):
+    """A separator that hears half of everything as drums, some as bass and other,
+    and no voice at all. Records what it was given."""
+    from bejeweled.sources import separate
+
+    heard = []
+
+    def fake(path, work_dir, **kwargs):
+        os.makedirs(work_dir, exist_ok=True)
+        audio = combine._decode(ffmpeg, path, RATE)
+        heard.append(audio)
+        shares = {"Drums": 0.5, "Bass": 0.3, "Guitar": 0.2, "Vocals": 0.0}
+        stems = [Stem(name, combine._encode(ffmpeg, audio * share, RATE,
+                                            os.path.join(work_dir, f"{name}.wav")))
+                 for name, share in shares.items()]
+        return StemSet(title="x", stems=stems, source="a separator")
+
+    monkeypatch.setattr(separate, "separate", fake)
+    return heard
+
+
+def test_extend_separates_only_what_the_stems_lack(band_files, band, extended, stand_in,
+                                                   ffmpeg, tmp_path):
+    out = combine.extend(_band_set(band_files), band_files["extended"], str(tmp_path / "work"))
+    report = out.extra["extension"]
+    assert [p.kind for p in report.pieces] == ["silence", "stems", "separated", "stems"]
+    # On the beats either side of the new stretch, to within the grid's precision
+    _, before, new_piece, after = report.pieces
+    assert new_piece.start == pytest.approx(CUT[0] + LEAD, abs=0.002)
+    assert new_piece.end == pytest.approx(CUT[0] + LEAD + NEW, abs=0.002)
+    assert (before.offset, after.offset) == (pytest.approx(LEAD, abs=1 / RATE),
+                                             pytest.approx(LEAD + NEW - 4, abs=1 / RATE))
+    assert [(w.start, w.end) for w in report.dropped] == [pytest.approx(CUT, abs=0.002)]
+    assert report.bpm == pytest.approx(120, abs=0.05)
+
+    # Only the new stretch was separated, with context either side
+    gap = (round(new_piece.start * RATE), round(new_piece.end * RATE))
+    low = gap[0] - int(combine.CONTEXT_SECONDS * RATE)
+    assert len(stand_in) == 1
+    assert np.allclose(stand_in[0], extended[low:low + len(stand_in[0])], atol=1e-6)
+
+    stems = _stems(ffmpeg, out)
+    lead, fade = int(LEAD * RATE), int(combine.FADE_SECONDS * RATE)
+    later = round(after.offset * RATE)
+    for name, real in band.items():
+        assert len(stems[name]) == len(extended)
+        # The real stems, untouched, wherever there is no seam
+        assert np.allclose(stems[name][lead:gap[0] - fade], real[:gap[0] - fade - lead])
+        assert np.allclose(stems[name][gap[1]:], real[gap[1] - later:len(extended) - later])
+        assert not stems[name][:lead - fade].any()
+
+    # The new stretch from the separator, each stem brought to its neighbour's level,
+    # and the guitar given to Other, there being nowhere else for it
+    inside = slice(gap[0] + fade, gap[1] - fade)
+    assert not stems["Vocals"][inside].any()
+    mix_gain = 1 / OTHER_GAIN
+    for name, share in (("Drums", 0.5), ("Bass", 0.3), ("Other", 0.2)):
+        gain = 10 ** (report.gains_db[name] / 20)
+        assert np.allclose(stems[name][inside], extended[inside] * share * gain, atol=1e-5)
+        assert abs(report.gains_db[name] - 20 * np.log10(mix_gain)) <= combine.STEM_GAIN_RANGE_DB
+
+    # The mixdown is the other version's own mix there, at the stems' level
+    master = _decode(ffmpeg, out.master)
+    assert np.allclose(master[inside], extended[inside] * mix_gain, atol=1e-5)
+    song = sum(band.values())
+    assert np.allclose(master[gap[1]:], song[gap[1] - later:len(extended) - later], atol=1e-5)
+
+
+def test_a_shorter_edit_is_only_the_stems(band_files, band, stand_in, ffmpeg, tmp_path):
+    song = sum(band.values())
+    a, b = (int(s * RATE) for s in CUT)
+    path = combine._encode(ffmpeg, np.concatenate([song[:a], song[b:]]), RATE,
+                           str(tmp_path / "edit.wav"))
+    out = combine.extend(_band_set(band_files), path, str(tmp_path / "work"))
+    report = out.extra["extension"]
+    assert not stand_in and report.separated == 0
+    assert [p.kind for p in report.pieces] == ["stems", "stems"]
+    assert [(w.start, w.end) for w in report.dropped] == [pytest.approx(CUT, abs=1e-3)]
+    drums = _stems(ffmpeg, out)["Drums"]
+    fade = int(combine.FADE_SECONDS * RATE)
+    assert np.allclose(drums[:a - fade], band["Drums"][:a - fade])
+    assert np.allclose(drums[a:], band["Drums"][b:])
+
+
+def test_a_version_at_another_speed_cannot_be_laid_out(band):
+    song = sum(band.values())
+    at = np.arange(0, len(song), 1.003)
+    fast = np.stack([np.interp(at, np.arange(len(song)), song[:, side])
+                     for side in (0, 1)], axis=1).astype(np.float32)
+    with pytest.raises(ValueError, match="drift apart|do not line up"):
+        combine.lay_out(song, fast, RATE)
+
+
+def test_the_extend_job_writes_a_marked_stem_file_and_cleans_up(band_files, stand_in, tmp_path):
+    out = tmp_path / "out"
+    written = jobs.extend_file(band_files["folder"], band_files["extended"], str(out), {})
+    assert os.path.basename(written.path) == "Song (Extended) (FN +RF).stem.mp4"
+    assert "8.0s separated by a separator" in written.stem_set.comment
+    assert os.listdir(out) == ["Song (Extended) (FN +RF).stem.mp4"]
+    assert sorted(os.listdir(band_files["folder"])) == [
+        "Bass.wav", "Drums.wav", "Master.wav", "Other.wav", "Vocals.wav"]
+
+
+def test_a_shorter_edit_gets_no_marker_of_its_own(band_files, band, stand_in, ffmpeg, tmp_path):
+    song = sum(band.values())
+    a, b = (int(s * RATE) for s in CUT)
+    path = combine._encode(ffmpeg, np.concatenate([song[:a], song[b:]]), RATE,
+                           str(tmp_path / "Song (Radio Edit).wav"))
+    written = jobs.extend_file(band_files["folder"], path, str(tmp_path / "out"), {},
+                               fmt="files")
+    assert written.stem_set.title == "Song (Radio Edit) (FN)"
+
+
+def test_the_same_edit_is_refused(band_files, stand_in, tmp_path):
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="same edit"):
+        jobs.extend_file(band_files["folder"], band_files["master"], str(out), {})
+    assert not out.exists() or os.listdir(out) == []

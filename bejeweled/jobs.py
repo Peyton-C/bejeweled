@@ -387,6 +387,90 @@ def graft_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | No
     return Written(out_path, stem_set, engine_stems)
 
 
+def extend_file(stems: str, mix: str, out_dir: str, cfg: dict, *, title: str | None = None,
+                separator: str | None = None, model: str | None = None,
+                device: str | None = None, suffix: str | None = None,
+                no_suffix: bool = False, fmt: str | None = None, codec: str | None = None,
+                palette: str | None = None, engine_library: str | None = None,
+                engine_key: str | None = None, progress=None) -> Written:
+    """Lay real stems along another version of the song, such as an extended mix.
+
+    `stems` is a stem file or a folder of stems, and is never written to. Only what
+    the other version has and the stems do not is separated, and nothing at all when
+    it is only shorter.
+    """
+    import shutil
+
+    from . import demucs as dm
+    from . import ffmpeg as ff
+    from .sources import combine, local, separate
+
+    fmt = _format(fmt, cfg)
+    target = engine_target(fmt, cfg, engine_library, engine_key)
+    sep_cfg = cfg.get("separate", {})
+    separator = _separator(separator, cfg)
+    out_dir = os.path.abspath(out_dir)
+    if not os.path.isfile(mix):
+        raise FileNotFoundError(f"no such file: {mix}")
+
+    ffmpeg = ff.find_ffmpeg()
+    mix_title = separate.read_tags(ff.probe(ffmpeg, mix))["title"]
+    stems = os.path.abspath(stems)
+    base = (os.path.basename(stems)[:-len(".stem.mp4")] if local.is_stem_file(stems)
+            else os.path.basename(stems))
+    work = os.path.join(out_dir, f"{safe(base)} - extended")
+
+    cover = None
+    try:
+        if local.is_stem_file(stems):
+            given = local.from_stem_file(stems, work, ffmpeg)
+            cover = separate._extract_cover(ffmpeg, stems, ff.probe(ffmpeg, stems), work)
+            given.cover = cover
+            unpacked = [s.path for s in given.stems]
+        else:
+            given = local.from_folder(stems)
+            unpacked = []
+        stem_set = combine.extend(
+            given, mix, work, separator=separator,
+            model=model or sep_cfg.get("model"),
+            device=device or sep_cfg.get("device") or dm.default_device(),
+            progress=progress, ffmpeg=ffmpeg,
+        )
+        report = stem_set.extra["extension"]
+        if (len([p for p in report.pieces if p.kind != "silence"]) == 1
+                and not report.dropped):
+            # Better nothing than a file that is only the stems again
+            raise ValueError("the two versions are the same edit, so there is nothing "
+                             "to extend")
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+
+    # Nothing separated is real stems cut to another edit, which needs no marker of
+    # its own beyond the one the stems carried
+    marker = None if no_suffix else suffix or (config.title_suffix(
+        combine.SOURCE_NAME, combine.title_marker(separator),
+        combine.MARK_TITLES_BY_DEFAULT, cfg) if report.separated else None)
+    named = title or mix_title or os.path.splitext(os.path.basename(mix))[0]
+    stem_set.title = combine.mark_title(named, marker, carry_from=given.title)
+    if cfg.get("metadata", {}).get("write_comment", True):
+        stem_set.comment = stem_set.describe_source(__version__)
+
+    if fmt == "files":
+        return Written(work, stem_set)
+
+    merge = {"Lead": "Other"} if stem_set.get("Lead") else None
+    out_path = _write_ni(stem_set, out_dir, cfg, merge, codec, palette)
+    engine_stems = target and write_engine(stem_set, out_path, target, merge)
+    written = unpacked + [s.path for s in stem_set.stems] + [cover, stem_set.master]
+    for leftover in written:
+        if leftover and os.path.exists(leftover):
+            os.remove(leftover)
+    if not os.listdir(work):
+        os.rmdir(work)
+    return Written(out_path, stem_set, engine_stems)
+
+
 def assemble_file(out_dir: str, cfg: dict, *, mix: str | None = None,
                   instrumental: str | None = None, acapella: str | None = None,
                   title: str | None = None, separator: str | None = None,

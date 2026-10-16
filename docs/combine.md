@@ -5,6 +5,7 @@ bejeweled builds one set of stems from more than one version of the same song.
 bejeweled combine graft "Work Work (FN).stem.mp4" "Work Bitch.flac" --title "Work Bitch"
 bejeweled combine graft ./clean-stems/ "Explicit.flac"
 bejeweled combine graft "Clean.stem.mp4" "Explicit.flac" --separator hybrid
+bejeweled combine extend "HOT TO GO! (FN).stem.mp4" "HOT TO GO! (Demo Version).flac"
 bejeweled combine assemble --mix "Song.flac" --instrumental "Song (Instrumental).flac"
 bejeweled combine assemble --instrumental "Instrumental.flac" --acapella "Acapella.flac" --title "Song"
 ```
@@ -29,6 +30,22 @@ A song whose hook is the censored word has a graft every bar, and with the vocal
 
 The mixdown in the stem file gets the same grafts as the vocal stem and is otherwise left as it was.
 
+## Extending
+Real stems often exist for one edit of a song when the one you want is another: an extended mix, a demo with a section the album cut, a radio edit. bejeweled lays the stems along the other version, at whatever offset each stretch needs, and separates only what the other version has and the stems do not. A version that is only shorter needs no separating at all.
+
+The first argument is the stems, as a `.stem.mp4` or a folder of stems, and the second is the other version as an ordinary mixed file. Neither is written to. The two must be the same recording at the same speed, and bejeweled refuses a pair that drifts apart.
+
+| Stretch of the other version | What bejeweled does |
+| --- | --- |
+| The stems have it | The real stems |
+| Only the other version has it | Separates it, with a few seconds either side to set each stem's level against the real ones |
+| Silence | Silence |
+| Only the stems have it | Leaves it out, and lists it |
+
+Seams go on a beat, found from the stems' BPM tag where they have one. Without a tag bejeweled finds the beat itself, sometimes at half the tempo, which still puts each seam on a beat but not always on the downbeat. After extending bejeweled prints where every stretch came from. Listen across the seams before trusting the file.
+
+The mixdown is the stems' own, with the other version's mix in the separated stretches. Those stretches are only as good as the file they came from, so use the best copy of the other version you have.
+
 ## Assembling
 A song with no real stems anywhere often still has an official instrumental or acapella. bejeweled separates the song with those beside it, so the separator has less to guess. Give it any two of `--mix`, `--instrumental` and `--acapella`, or all three. None of them is written to.
 
@@ -50,11 +67,11 @@ With a mix, bejeweled lines each part up to it and matches its level itself, and
 Every part must be stereo. A part that is not the same edit as the mix, a radio edit's instrumental against the album version, is refused or leaves the difference in the stems.
 
 ## Options
-`--separator`, `--model` and `--device` apply to both actions.
+`--separator`, `--model` and `--device` apply to every action.
 
 | Option | Config | Default |
 | --- | --- | --- |
-| `--title` | | graft: the explicit file's title tag, or the stems' title. assemble: the title tag of the mix, or of the instrumental |
+| `--title` | | graft: the explicit file's title tag, or the stems' title. extend: the other version's title tag, or its file name. assemble: the title tag of the mix, or of the instrumental |
 | `--separator` | `separator` under `[separate]` | `roformer` |
 | `--model` | `model` under `[separate]` | as for `separate` |
 | `--device` | `device` under `[separate]` | as for `separate` |
@@ -68,6 +85,8 @@ Part of the vocal is a separation, so bejeweled marks the title to keep the file
 | --- | --- | --- | --- |
 | Unmarked | `(+RF)` | `(+HY)` | `(+DE)` |
 | Marked `(FN)` | `(FN +RF)` | `(FN +HY)` | `(FN +DE)` |
+
+An extension that separated anything is marked the same way, `(+RF)` or `(FN +RF)`. One that separated nothing is the real stems cut to another edit, and keeps only the marker the stems had.
 
 An assembly is still a separation, so it is marked as one, with letters for the parts that helped: `AC` for an acapella and `IN` for an instrumental.
 

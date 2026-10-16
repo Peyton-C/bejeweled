@@ -33,6 +33,10 @@ separator's letters after a plus, joined to any marker the stems already carried
 `(+RF)`, or `(FN +RF)` for Festival stems. The plus keeps it apart from a full
 separation of the same song.
 
+An extension lays real stems along another edit of the song and separates only what
+they lack, so it is marked as a graft is, `(+RF)` or `(FN +RF)`. One that separated
+nothing is the real stems cut to another edit and gets no marker of its own.
+
 An assembly is a separation helped by the song's instrumental, acapella or both, so it
 is marked as a separation with letters for the parts that helped: `(RF IN)`, `(RF AC)`,
 `(RF AC IN)`. The mix has no letters, being what a plain separation starts from. Never

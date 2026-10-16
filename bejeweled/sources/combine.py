@@ -11,6 +11,14 @@ separation of the retail master correlate at only 0.39 as waveforms, since they 
 different mixes of the same performance, but their spectra agree within a few dB
 wherever the words are the same.
 
+Extending lays real stems along another edit of the song, an extended mix or a demo
+with a section the album cut, and separates only the stretches the stems lack. The
+other version is searched for every offset it lines up with the stems at, each half
+second is given the offset that matches, and the ends of every stretch are found by
+ear and put on a beat. HOT TO GO's demo against Festival's stems came to two offsets
+6.857 s apart, exactly four bars at 140 BPM, with 19.7 s of a 191.7 s song separated
+and Festival's own 12.9 s bridge left out.
+
 Assembling is for a song with no real stems at all, only some of its mix, its
 instrumental and its acapella. Each part given is one thing less the separator has to
 pull out: an acapella is the vocal stem as it stands, an instrumental is separated with
@@ -29,7 +37,7 @@ import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -101,6 +109,56 @@ POST_SECONDS = 0.12
 # Short, because the two stems are not phase-aligned and a long crossfade between them
 # combs
 FADE_SECONDS = 0.015
+
+# An extension finds every offset the two versions line up at from chunks of the
+# other version this long, each searched for across the whole of the stems. One
+# offset needs this many chunks behind it, since a chorus heard again elsewhere in
+# the song wins the odd chunk on its own.
+EXTEND_CHUNK_SECONDS = 5.0
+OFFSET_SUPPORT = 2
+# Chunks that land within this of each other are one offset, found to the sample
+# after. HOT TO GO's chunks strayed by up to 30 ms either way of the true offset,
+# from beats that line up a little either side of it too.
+CLUSTER_SECONDS = 0.05
+
+# Then every half second of the other version is scored against every offset, and
+# the path through them chosen that matches best with fewest changes. A stretch that
+# matches at no offset scores what no offset beats there, and a change costs as much
+# as this many blocks matching at that score would earn.
+BLOCK_SECONDS = 0.5
+NO_MATCH_SCORE = 0.2
+CHANGE_COST = 1.5
+
+# The path only finds each stretch to within a block or two, so its ends are found
+# again by ear: where the stems stop sounding like the other version for longer than
+# MATCH_HOLD_SECONDS, over a median that keeps one odd frame from breaking a match
+SEARCH_SECONDS = 2.0
+MATCH_DB = 6.0
+MATCH_MEDIAN_SECONDS = 0.5
+MATCH_HOLD_SECONDS = 1.0
+
+# Seams go on a beat of the stems' grid, the nearest one that keeps the real stems
+# off audio they do not match, give or take this
+SNAP_SECONDS = 0.1
+# A grid whose beats hold this much more onset energy than the average spot in the
+# bar is a grid; music that drifts or has no beat to speak of leaves seams unsnapped
+GRID_STRENGTH = 4.0
+GRID_BPM = (70.0, 180.0)
+
+# Two offsets closer than this are one version drifting against the other, since an
+# edit moves a song by beats, not by a few milliseconds
+EDIT_SECONDS = 0.1
+
+# What is separated around a stretch, so the separator hears it in context and the
+# stems either side give each separated stem its level
+CONTEXT_SECONDS = 5.0
+# How far one separated stem's level may sit from the level the whole mix needed. On
+# HOT TO GO the four stems needed between 0.6 dB under and 4.7 over it, so the range
+# holds back only a stem matched to bleed, one nearly silent beside the stretch.
+STEM_GAIN_RANGE_DB = 6.0
+
+# Separated stems a set has no slot for go here, the guitar into Festival's Lead
+SEPARATED_INTO = {"Guitar": "Lead"}
 
 # What an assembly can be given, the mix first since everything is lined up to it
 PARTS = ("mix", "instrumental", "acapella")
@@ -318,10 +376,10 @@ def _band_power(audio: np.ndarray, rate: int, edges=None) -> np.ndarray:
     return out
 
 
-def find_windows(clean: np.ndarray, donor: np.ndarray, rate: int
-                 ) -> tuple[list[Window], list[Window], float]:
-    """Where an aligned donor differs from the clean stem: the windows worth grafting,
-    the ones only the clean stem has, and the gain that matches the donor's level."""
+def _compare(clean: np.ndarray, donor: np.ndarray, rate: int
+             ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """How far apart an aligned donor sounds from the clean audio, frame by frame, in
+    dB, with each one's level per frame and the gain that matches the donor's level."""
     a, b = _band_power(clean, rate), _band_power(donor, rate)
     level_a, level_b = a.sum(axis=0), b.sum(axis=0)
     floor = level_a.max() * ACTIVE_RATIO
@@ -342,6 +400,14 @@ def find_windows(clean: np.ndarray, donor: np.ndarray, rate: int
     active = (level_a > floor) | (level_b > floor)
     apart = np.convolve(np.where(active, apart, 0.0),
                         np.ones(SMOOTH_FRAMES) / SMOOTH_FRAMES, mode="same")
+    return apart, level_a, level_b, gain
+
+
+def find_windows(clean: np.ndarray, donor: np.ndarray, rate: int
+                 ) -> tuple[list[Window], list[Window], float]:
+    """Where an aligned donor differs from the clean stem: the windows worth grafting,
+    the ones only the clean stem has, and the gain that matches the donor's level."""
+    apart, level_a, level_b, gain = _compare(clean, donor, rate)
 
     hop = HOP_SAMPLES / rate
     runs: list[list[int]] = []  # first frame, one past the last
@@ -426,6 +492,509 @@ def graft(stem_set: StemSet, donor_path: str, work_dir: str, stem: str = GRAFT_S
     report = Graft(target.name, offset / rate, 20 * float(np.log10(gain)), windows, only_clean)
     return replace(stem_set, stems=stems, master=master,
                    extra={**stem_set.extra, "graft": report})
+
+
+# --------------------------------------------------------------------------- extend
+
+@dataclass
+class Piece:
+    """A stretch of the other version, in seconds on its timeline, and what fills it."""
+
+    start: float
+    end: float
+    kind: str                # "stems", "separated" or "silence"
+    offset: float = 0.0      # for "stems": seconds the other version runs ahead of them
+
+
+@dataclass
+class Extension:
+    """How a set was laid out along another version of the song."""
+
+    pieces: list[Piece]
+    dropped: list[Window]    # stretches of the stems the other version does not have
+    bpm: float | None        # the grid the seams are on, None where there was none
+    gains_db: dict[str, float] = field(default_factory=dict)  # on the separated stems
+
+    @property
+    def separated(self) -> float:
+        return sum(p.end - p.start for p in self.pieces if p.kind == "separated")
+
+
+def _mono_shifted(audio: np.ndarray, offset: int, length: int) -> np.ndarray:
+    out = np.zeros(length, dtype=np.float32)
+    source, target = max(offset, 0), max(-offset, 0)
+    count = min(length - target, len(audio) - source)
+    if count > 0:
+        out[target:target + count] = audio[source:source + count]
+    return out
+
+
+def candidate_offsets(stems: np.ndarray, other: np.ndarray, rate: int) -> list[int]:
+    """Every offset the other version lines up with the stems at, to the sample:
+    other[t] is stems[t - offset] wherever that offset holds."""
+    def averaged(x):
+        usable = len(x) - len(x) % DECIMATE
+        return x[:usable].reshape(-1, DECIMATE).mean(axis=1)
+
+    a, b = stems.mean(axis=1), other.mean(axis=1)
+    low_a, low_b = averaged(a), averaged(b)
+    chunk = int(EXTEND_CHUNK_SECONDS * rate / DECIMATE)
+    if len(low_a) < chunk or len(low_b) < chunk:
+        return []
+    size = 1 << (len(low_a) + chunk).bit_length()
+    spectrum = np.fft.rfft(low_a, size)
+    # The stems' level under every chunk-long window, to score each lag on its own
+    energy = np.concatenate([[0.0], np.cumsum(low_a.astype(np.float64) ** 2)])
+    window_norm = np.sqrt(np.maximum(energy[chunk:] - energy[:-chunk], 0))
+
+    found = []  # (offset, donor chunk start), at the full rate
+    for start in range(0, len(low_b) - chunk + 1, chunk // 2):
+        x = low_b[start:start + chunk]
+        norm = np.linalg.norm(x)
+        if not norm:
+            continue
+        scores = np.fft.irfft(np.conj(np.fft.rfft(x, size)) * spectrum, size)
+        scores = scores[:len(window_norm)] / (window_norm * norm + 1e-12)
+        best = int(np.argmax(scores))
+        if scores[best] >= CHUNK_CONFIDENCE:
+            found.append(((start - best) * DECIMATE, start * DECIMATE))
+
+    found.sort()
+    clusters, tolerance = [], CLUSTER_SECONDS * rate
+    for offset, start in found:
+        if clusters and offset - clusters[-1][-1][0] <= tolerance:
+            clusters[-1].append((offset, start))
+        else:
+            clusters.append([(offset, start)])
+
+    offsets, reach, full = [], int(tolerance) + DECIMATE, chunk * DECIMATE
+    for cluster in clusters:
+        if len(cluster) < OFFSET_SUPPORT:
+            continue
+        middle = int(np.median([offset for offset, _ in cluster]))
+        total = np.zeros(2 * reach + 1)
+        for _, start in cluster:
+            x = b[start:start + full]
+            y = _mono_shifted(a, start - middle - reach, len(x) + 2 * reach)
+            n = len(x) + len(y)
+            total += np.fft.irfft(np.conj(np.fft.rfft(x, n)) * np.fft.rfft(y, n), n)[:2 * reach + 1]
+        offset = middle + reach - int(np.argmax(total))
+        if not any(abs(offset - o) <= DECIMATE for o in offsets):
+            offsets.append(offset)
+    return offsets
+
+
+def _block_scores(stems: np.ndarray, other: np.ndarray, offsets: list[int], rate: int
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """How well each block of the other version matches the stems at each offset, as
+    a correlation, and which blocks have anything in them to match."""
+    block = int(BLOCK_SECONDS * rate)
+    count = len(other) // block + (len(other) % block > 0)
+    b = np.zeros(count * block, dtype=np.float32)
+    b[:len(other)] = other.mean(axis=1)
+    b = b.reshape(count, block)
+    power = (b.astype(np.float64) ** 2).sum(axis=1)
+    audible = power > power.max() * ACTIVE_RATIO
+
+    a = stems.mean(axis=1)
+    scores = np.zeros((len(offsets), count))
+    for row, offset in enumerate(offsets):
+        x = _mono_shifted(a, -offset, count * block).reshape(count, block)
+        dot = (x * b).sum(axis=1, dtype=np.float64)
+        norm = np.sqrt((x.astype(np.float64) ** 2).sum(axis=1) * power)
+        scores[row] = np.where(norm > 0, dot / (norm + 1e-12), 0.0)
+    return scores, audible
+
+
+def _best_path(scores: np.ndarray, audible: np.ndarray) -> np.ndarray:
+    """The offset each block is filled from, -1 for none, chosen to match best with
+    fewest changes."""
+    states = len(scores) + 1
+    reward = np.vstack([scores, np.full(scores.shape[1], NO_MATCH_SCORE)])
+    # Silence matches anything, so it never decides where a change goes
+    reward[:, ~audible] = NO_MATCH_SCORE
+    total = reward[:, 0].copy()
+    came = np.zeros(reward.shape, dtype=np.int64)
+    for column in range(1, reward.shape[1]):
+        stay, leave = total, total.max() - CHANGE_COST
+        best = int(np.argmax(total))
+        came[:, column] = np.where(stay >= leave, np.arange(states), best)
+        total = np.maximum(stay, leave) + reward[:, column]
+    path = np.empty(reward.shape[1], dtype=np.int64)
+    path[-1] = int(np.argmax(total))
+    for column in range(reward.shape[1] - 1, 0, -1):
+        path[column - 1] = came[path[column], column]
+    return np.where(path == states - 1, -1, path)
+
+
+def _held(mask: np.ndarray, frames: int) -> np.ndarray:
+    """Frames from which `mask` holds for at least `frames` frames running."""
+    run = np.zeros(len(mask) + 1, dtype=np.int64)
+    for index in range(len(mask) - 1, -1, -1):
+        run[index] = run[index + 1] + 1 if mask[index] else 0
+    return run[:-1] >= frames
+
+
+def _matching(stems: np.ndarray, other: np.ndarray, offset: int, low: int, high: int,
+              start: int, end: int, rate: int) -> tuple[int, int] | None:
+    """Where the stems at `offset` sound like the other version, found from the rough
+    stretch [start, end) by walking each end out while they still match, or in until
+    they first match for good, never beyond [low, high).
+
+    Only the ends move, since a word that differs inside is a graft's business rather
+    than a reason to separate everything. HOT TO GO's opening bars scored too low to
+    start the path, and walking out from it found them matching from the first beat.
+    """
+    if high - low < FFT_SAMPLES:
+        return None
+    clean = _shifted(stems, low - offset, high - low)
+    try:
+        apart = _compare(clean, other[low:high], rate)[0]
+    except ValueError:
+        return None
+    width = int(MATCH_MEDIAN_SECONDS * rate / HOP_SAMPLES) | 1
+    padded = np.pad(apart, width // 2, mode="edge")
+    apart = np.median(np.lib.stride_tricks.sliding_window_view(padded, width), axis=1)
+    same = apart < MATCH_DB
+    hold = max(1, int(MATCH_HOLD_SECONDS * rate / HOP_SAMPLES))
+    held_on, held_back = _held(same, hold), _held(same[::-1], hold)[::-1]
+
+    first = min(len(same) - 1, max(0, (start - low) // HOP_SAMPLES))
+    last = min(len(same) - 1, max(0, (end - low) // HOP_SAMPLES - 1))
+    if held_on[first]:
+        while first > 0 and same[first - 1]:
+            first -= 1
+    else:
+        ahead = np.flatnonzero(held_on[first:last + 1])
+        if not len(ahead):
+            return None
+        first += ahead[0]
+    if held_back[last]:
+        while last < len(same) - 1 and same[last + 1]:
+            last += 1
+    else:
+        behind = np.flatnonzero(held_back[first:last + 1])
+        if not len(behind):
+            return None
+        last = first + behind[-1]
+    if last <= first:
+        return None
+    return low + first * HOP_SAMPLES, min(high, low + (last + 1) * HOP_SAMPLES)
+
+
+def beat_grid(audio: np.ndarray, rate: int, bpm: float | None = None
+              ) -> tuple[float, float] | None:
+    """The beat as (seconds per beat, seconds to the first), fitted to the onsets of
+    `audio`, or None where they keep no steady beat. A tagged BPM narrows the search.
+
+    Onsets are rises in level rather than in log level, which let HOT TO GO's hi-hats
+    between the beats outweigh its kicks and put the grid on the off-beat.
+    """
+    hop = 128
+    mono = audio.mean(axis=1).astype(np.float64)
+    usable = len(mono) - len(mono) % hop
+    if usable < 8 * rate:
+        return None
+    level = np.sqrt((mono[:usable] ** 2).reshape(-1, hop).mean(axis=1))
+    onsets = np.maximum(np.diff(level), 0)
+    frames = rate / hop
+    index = np.arange(len(onsets))
+    bins = 200
+
+    # The period is the one whose first eight multiples the onsets repeat at most. A
+    # single lag put HOT TO GO at 93.3 against its 140, and the multiples both pin
+    # the period to a fraction of a frame and favour the beat over half or twice it.
+    centred = onsets - onsets.mean()
+    spectrum = np.fft.rfft(centred, 2 * len(centred))
+    lagged = np.fft.irfft(np.abs(spectrum) ** 2)[:len(centred)]
+    low, high = GRID_BPM
+    if bpm and low <= bpm <= high:
+        low, high = bpm * 0.97, bpm * 1.03
+    periods = np.arange(60 * frames / high, 60 * frames / low, 0.01)
+    multiples = np.arange(1, 9)[:, None] * periods
+    comb = np.interp(multiples, np.arange(len(lagged)), lagged, right=0).sum(axis=0)
+    guess = 60 * frames / periods[int(np.argmax(comb))]
+
+    def fold(tempo):
+        period = 60 * frames / tempo
+        folded, _ = np.histogram(index % period, bins=bins, range=(0, period), weights=onsets)
+        return folded.max() / (folded.mean() + 1e-12), folded, period
+
+    # Then the fold that stacks the beats tightest, which finds where they fall
+    tempo = max(np.geomspace(guess * 0.998, guess * 1.002, 81), key=lambda t: fold(t)[0])
+    strength, folded, period = fold(tempo)
+    if strength < GRID_STRENGTH:
+        return None
+    # A rise in level shows in the frame after the one it starts in
+    phase = ((int(np.argmax(folded)) + 0.5) / bins * period + 1) / frames
+    return 60 / tempo, phase
+
+
+def _snap(seconds: float, grid, later: bool) -> float:
+    """The beat a seam at `seconds` of the stems goes on: the first one not much
+    before it for a stretch of stems starting, the last one not much after it for one
+    ending."""
+    if grid is None:
+        return seconds
+    period, phase = grid
+    if later:
+        return phase + np.ceil((seconds - SNAP_SECONDS - phase) / period) * period
+    return phase + np.floor((seconds + SNAP_SECONDS - phase) / period) * period
+
+
+def lay_out(stems: np.ndarray, other: np.ndarray, rate: int, grid=None
+            ) -> list[tuple[int, int, int | None]]:
+    """The other version as stretches of (start, end, offset) in its samples, the
+    offset None where the stems have nothing that sounds like it.
+
+    `stems` is the mix of the stems, `grid` the beat their seams go on.
+    """
+    offsets = candidate_offsets(stems, other, rate)
+    if not offsets:
+        raise ValueError("the two versions do not line up, they may not be the same "
+                         "recording")
+    scores, audible = _block_scores(stems, other, offsets, rate)
+    path = _best_path(scores, audible)
+    block = int(BLOCK_SECONDS * rate)
+
+    runs = []  # rough (start, end, offset) for each stretch at one offset
+    for index, state in enumerate(path):
+        if state < 0:
+            continue
+        if runs and runs[-1][2] == offsets[state] and runs[-1][1] == index * block:
+            runs[-1][1] = (index + 1) * block
+        else:
+            runs.append([index * block, (index + 1) * block, offsets[state]])
+
+    search, length = int(SEARCH_SECONDS * rate), len(other)
+    found = []
+    for index, (start, end, offset) in enumerate(runs):
+        # Out as far as the neighbouring stretches, and only where the stems have
+        # audio at this offset
+        before = runs[index - 1][1] if index else 0
+        after = runs[index + 1][0] if index + 1 < len(runs) else length
+        low = max(0, offset, min(before, start - search))
+        high = min(length, len(stems) + offset, max(after, end + search))
+        where = _matching(stems, other, offset, low, high, start, end, rate)
+        if where:
+            found.append([*where, offset])
+
+    # Ends found by ear may overlap where both offsets sound right, as a repeated
+    # bar does, and the line is drawn halfway
+    for left, right in zip(found, found[1:]):
+        if left[1] > right[0]:
+            left[1] = right[0] = (left[1] + right[0]) // 2
+
+    floor = float(np.max(np.abs(other), initial=0)) * np.sqrt(ACTIVE_RATIO)
+
+    def silent(start, end):
+        """A gap with nothing audible, beside which a seam stays where it was found,
+        or the last beat's ring would be cut short for a beat it does not need."""
+        return end > start and np.max(np.abs(other[start:end]), initial=0) < floor
+
+    snapped = []
+    for index, (start, end, offset) in enumerate(found):
+        before = found[index - 1][1] if index else 0
+        after = found[index + 1][0] if index + 1 < len(found) else length
+        first, last = start, end
+        if start > 0 and not silent(before, start):
+            first = round(_snap((start - offset) / rate, grid, later=True) * rate) + offset
+        if end < length and not silent(end, after):
+            last = round(_snap((end - offset) / rate, grid, later=False) * rate) + offset
+        first, last = max(first, 0, offset), min(last, length, len(stems) + offset)
+        # Two stretches seamed on one beat can miss each other by a few samples, the
+        # grid not being exact to the sample across two offsets, and nothing that short
+        # is worth separating
+        if snapped and first - snapped[-1][1] < SNAP_SECONDS * rate:
+            first = snapped[-1][1]
+        if last > first:
+            snapped.append((first, last, offset))
+    if not snapped:
+        raise ValueError("the two versions do not line up, they may not be the same "
+                         "recording, or one may run at another speed")
+
+    offsets_used = sorted({offset for _, _, offset in snapped})
+    for a, b in zip(offsets_used, offsets_used[1:]):
+        if b - a < EDIT_SECONDS * rate:
+            raise ValueError("the two versions drift apart, they run at different "
+                             "speeds")
+
+    layout, at = [], 0
+    for start, end, offset in snapped:
+        if start > at:
+            layout.append((at, start, None))
+        layout.append((start, end, offset))
+        at = end
+    if at < length:
+        layout.append((at, length, None))
+    return layout
+
+
+def _weights(bounds: list[int], length: int, fade: int) -> list[np.ndarray]:
+    """One weight per stretch, summing to one everywhere, each crossfade ending on the
+    seam so the beat there comes whole from the stretch it starts."""
+    edges = [0] + bounds + [length]
+    ramps = []
+    for seam in edges:
+        ramp = np.clip((np.arange(length) - (seam - fade)) / fade, 0, 1).astype(np.float32)
+        ramps.append(ramp)
+    ramps[0][:] = 1
+    ramps[-1][:] = 0
+    return [(ramps[i] - ramps[i + 1])[:, None] for i in range(len(edges) - 1)]
+
+
+def extend(stem_set: StemSet, other_path: str, work_dir: str,
+           separator: str = DEFAULT_SEPARATOR, model: str | None = None,
+           device: str | None = None, progress=None, ffmpeg: str | None = None) -> StemSet:
+    """Lay real stems along another version of the song, with what only that version
+    has separated from it.
+
+    The result follows the other version from start to end: the stems wherever they
+    sound like it, at whatever offset that takes, and a separation of the other
+    version wherever nothing in the stems does. Each stretch is separated with a few
+    seconds either side, which set each separated stem's level against the real one.
+    The mixdown is the stems' own, with the other version's mix in the separated
+    stretches.
+    """
+    ffmpeg = ff.find_ffmpeg(ffmpeg)
+    rate = _sample_rate(ffmpeg, stem_set.stems[0].path)
+    real = {s.name: _decode(ffmpeg, s.path, rate) for s in stem_set.stems}
+    stem_length = max(len(audio) for audio in real.values())
+    real = {name: _shifted(audio, 0, stem_length) for name, audio in real.items()}
+    if stem_set.master:
+        mixdown = _shifted(_decode(ffmpeg, stem_set.master, rate), 0, stem_length)
+    else:
+        mixdown = sum(real.values())
+    other = _decode(ffmpeg, other_path, rate)
+    length = len(other)
+
+    drums = stem_set.get("Drums")
+    grid = beat_grid(real[drums.name] if drums else mixdown, rate, stem_set.bpm)
+    layout = lay_out(mixdown, other, rate, grid)
+
+    def from_stems(audio):
+        out = np.zeros((length, 2), dtype=np.float32)
+        for start, end, offset in layout:
+            if offset is not None:
+                out[start:end] = _shifted(audio, start - offset, end - start)
+        return out
+
+    stems_mask = np.zeros(length, dtype=bool)
+    for start, end, offset in layout:
+        stems_mask[start:end] = offset is not None
+    if not stems_mask.any():
+        raise ValueError("the two versions do not line up, they may not be the same "
+                         "recording")
+    placed_mix = from_stems(mixdown)
+    mix_gain = float(np.sqrt(np.sum(placed_mix[stems_mask].astype(np.float64) ** 2)
+                             / (np.sum(other[stems_mask].astype(np.float64) ** 2) + 1e-20)))
+
+    # A stretch of the other version with nothing audible in it needs no separating
+    floor = float(np.max(np.abs(other))) * np.sqrt(ACTIVE_RATIO)
+    kinds = []
+    for start, end, offset in layout:
+        if offset is not None:
+            kinds.append("stems")
+        elif np.max(np.abs(other[start:end]), initial=0) < floor:
+            kinds.append("silence")
+        else:
+            kinds.append("separated")
+
+    stretches = [(start, end) for (start, end, _), kind in zip(layout, kinds)
+                 if kind == "separated"]
+
+    def staged(index):
+        if not progress:
+            return None
+        return lambda done, total, *stage: (
+            progress(done, total, *stage) if stage
+            else progress(index * total + done, len(stretches) * total))
+
+    placed = {name: from_stems(audio) for name, audio in real.items()}
+    sources = {name: np.zeros((length, 2), dtype=np.float32) for name in real}
+    gains_db: dict[str, float] = {}
+    models = None
+    os.makedirs(work_dir, exist_ok=True)
+    scratch = os.path.join(work_dir, ".extend")
+    os.makedirs(scratch, exist_ok=True)
+    context = int(CONTEXT_SECONDS * rate)
+    names = {name.lower(): name for name in real}
+    try:
+        for index, (start, end) in enumerate(stretches):
+            low, high = max(0, start - context), min(length, end + context)
+            clip = _encode(ffmpeg, other[low:high], rate,
+                           os.path.join(scratch, f"stretch {index}.wav"))
+            separated = sep.separate(clip, os.path.join(scratch, f"stretch {index}"),
+                                     separator=separator, model=model, device=device,
+                                     progress=staged(index), ffmpeg=ffmpeg)
+            models = separated.source
+            heard: dict[str, np.ndarray] = {}
+            for stem in separated.stems:
+                into = names.get(SEPARATED_INTO.get(stem.name, stem.name).lower()) \
+                    or names.get(stem.name.lower()) or names.get(VOICE_ELSEWHERE.lower())
+                if into is None:
+                    continue
+                audio = _shifted(_decode(ffmpeg, stem.path, rate), 0, high - low)
+                heard[into] = heard[into] + audio if into in heard else audio
+
+            # The stems either side, inside the context, set each separated stem's level
+            beside = stems_mask[low:high].copy()
+            beside[start - low:end - low] = False
+            mix_power = float(np.sum(placed_mix[low:high][beside].astype(np.float64) ** 2))
+            low_gain, high_gain = (mix_gain * 10 ** (sign * STEM_GAIN_RANGE_DB / 20)
+                                   for sign in (-1, 1))
+            for name, audio in heard.items():
+                want = float(np.sum(placed[name][low:high][beside].astype(np.float64) ** 2))
+                have = float(np.sum(audio[beside].astype(np.float64) ** 2))
+                gain = mix_gain
+                # A stem all but silent beside the stretch has only bleed to match
+                if want > mix_power * ACTIVE_RATIO and have > 0:
+                    gain = float(np.clip(np.sqrt(want / have), low_gain, high_gain))
+                gains_db[name] = 20 * float(np.log10(gain))
+                sources[name][low:high] = audio * np.float32(gain)
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        if os.path.isdir(work_dir) and not os.listdir(work_dir):
+            os.rmdir(work_dir)
+        raise
+    shutil.rmtree(scratch, ignore_errors=True)
+
+    fade = max(1, int(FADE_SECONDS * rate))
+    weights = _weights([end for _, end, _ in layout[:-1]], length, fade)
+
+    def joined(stems_audio, separated_audio):
+        out = np.zeros((length, 2), dtype=np.float32)
+        for (start, end, offset), kind, weight in zip(layout, kinds, weights):
+            if kind == "stems":
+                # Taken past its own ends by a fade, so the crossfade has it to fade
+                lead = max(0, start - fade)
+                piece = np.zeros((length, 2), dtype=np.float32)
+                piece[lead:end] = _shifted(stems_audio, lead - offset, end - lead)
+                out += piece * weight
+            elif kind == "separated":
+                out += separated_audio * weight
+        return out
+
+    stems = [Stem(s.name, _encode(ffmpeg, joined(real[s.name], sources[s.name]), rate,
+                                  os.path.join(work_dir, f"{s.name}.wav")), s.color)
+             for s in stem_set.stems]
+    master = _encode(ffmpeg, joined(mixdown, other * np.float32(mix_gain)), rate,
+                     os.path.join(work_dir, "Master.wav"))
+
+    pieces = [Piece(start / rate, end / rate, kind, (offset or 0) / rate)
+              for (start, end, offset), kind in zip(layout, kinds)]
+    used = sorted((p.start - p.offset, p.end - p.offset) for p in pieces if p.kind == "stems")
+    dropped, at = [], 0.0
+    for start, end in used + [(stem_length / rate, stem_length / rate)]:
+        if start - at >= BLOCK_SECONDS:
+            dropped.append(Window(at, start))
+        at = max(at, end)
+    report = Extension(pieces, dropped, 60 / grid[0] if grid else None, gains_db)
+    source = f"stems laid along {os.path.basename(other_path)}"
+    if models:
+        source += f", {report.separated:.1f}s separated by {models}"
+    return replace(stem_set, stems=stems, master=master, source=source,
+                   extra={**stem_set.extra, "extension": report, "separator": separator})
 
 
 # ------------------------------------------------------------------------- assemble
