@@ -203,6 +203,11 @@ def test_graft_needs_the_stem_it_grafts(stem_files, tmp_path):
     ("Work Work (FN)", None, None, "Work Work (FN)"),
     ("Work Bitch", None, "Work Work (FN)", "Work Bitch (FN)"),
     ("Work Work (FN)", "explicit", None, "Work Work (FN) explicit"),
+    # A second pass by the same separator adds nothing to the marker
+    ("HOT TO GO! (demo version) (FN +RF)", "(+RF)", None, "HOT TO GO! (demo version) (FN +RF)"),
+    ("HOT TO GO! (Extended)", "(FN +RF)", "HOT TO GO! (demo version) (FN +RF)",
+     "HOT TO GO! (Extended) (FN +RF)"),
+    ("Work Work (FN +RF)", "(+HY)", None, "Work Work (FN +RF +HY)"),
 ])
 def test_the_marker_joins_one_the_stems_already_had(title, marker, carry, expected):
     assert combine.mark_title(title, marker, carry_from=carry) == expected

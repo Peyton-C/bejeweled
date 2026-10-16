@@ -254,14 +254,16 @@ def mark_title(title: str, marker: str | None, carry_from: str | None = None) ->
     carried = _MARKER_RE.search(carry_from if carry_from is not None else title)
     if carry_from is None and carried:
         title = title[:carried.start()]
-    inner = [carried.group(1)] if carried else []
+    inner = carried.group(1).split() if carried else []
     if marker:
         wrapped = re.fullmatch(r"\((.*)\)", marker)
         if not wrapped:
             # A suffix of the user's own is appended as it is
-            kept = f" ({inner[0]})" if inner else ""
+            kept = f" ({' '.join(inner)})" if inner else ""
             return f"{title}{kept} {marker}"
-        inner.append(wrapped.group(1))
+        # Letters the stems already carry are not repeated: HOT TO GO's demo (FN +RF)
+        # extended again by roformer is still FN stems with roformer added
+        inner += [part for part in wrapped.group(1).split() if part not in inner]
     return f"{title} ({' '.join(inner)})" if inner else title
 
 
