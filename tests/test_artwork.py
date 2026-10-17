@@ -27,6 +27,8 @@ class Session:
             # Like Deezer, whose artist: filter finds nothing for some artists
             filtered = params["q"].startswith("artist:")
             return Reply({"data": [] if filtered and self.unfiltered else self.deezer})
+        if url == artwork.DEEZER_ALBUM:
+            return Reply({"data": self.deezer})
         self.fetched.append(url)
         return Reply(content=b"jpeg")
 
@@ -59,6 +61,26 @@ def test_deezer_falls_back_to_a_plain_search(tmp_path):
     assert artwork.find("100 gecs", "Hand Crushed by a Mallet (Official)", str(tmp_path),
                         session=session)
     assert session.fetched == ["https://d/1000-gecs.jpg"]
+
+
+def test_an_album_matches_whole(tmp_path):
+    session = Session(itunes=[
+        {"artistName": "100 gecs", "collectionName": "1000 gecs and the Tree of Clues",
+         "artworkUrl100": "https://a/tree/100x100bb.jpg"},
+        {"artistName": "100 gecs", "collectionName": "1000 gecs - EP",
+         "artworkUrl100": "https://a/1000/100x100bb.jpg"},
+    ])
+    assert artwork.find_album("100 gecs", "1000 gecs", str(tmp_path), session=session)
+    assert session.fetched == ["https://a/1000/1000x1000bb.jpg"]
+
+
+def test_a_deluxe_edition_is_not_the_album(tmp_path):
+    session = Session(deezer=[{"artist": {"name": "Chappell Roan"},
+                               "title": "The Rise and Fall of a Midwest Princess (Deluxe)",
+                               "cover_xl": "https://d/deluxe.jpg"}])
+    assert artwork.find_album("Chappell Roan", "The Rise and Fall of a Midwest Princess",
+                              str(tmp_path), session=session) is None
+    assert session.fetched == []
 
 
 def test_a_title_alone_never_matches(tmp_path):

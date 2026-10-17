@@ -70,6 +70,8 @@ bejeweled writes the title, artist, year, key, BPM, cover art and a provenance c
 
 A song that arrives without cover art, a YouTube mix or a folder of stems, gets the cover of its release from iTunes, or from Deezer when iTunes has none. bejeweled takes a cover only when both the artist and the title match, so a song with no artist tag gets none. Set `find_cover = false` under `[metadata]` to turn this off, or pass `--no-cover` to `convert`. Pass `--cover` with an image to `convert` to use your own instead, which also covers a song neither service has. One cover may be given for several folders, such as an album's.
 
+Each song is looked up on its own, so the songs of one album can come back with different covers when some also appear on a deluxe edition or a remix album. Pass `--album` with `--artist` to look up the album's cover once and give it to every folder. The album's name must match whole, so a deluxe edition is never taken for it. When the album is not found, bejeweled looks up each song instead. `--album` also sets the album tag.
+
 Where bejeweled obtained the audio rather than the user, the title also gets a marker, `(FN)` for Fortnite Festival. Mixes of the same song can differ between platforms, so the marker keeps them apart in a library instead of letting one quietly stand in for the other.
 
 Stems bejeweled separated itself are marked too, `(RF)`, `(DE)` and their variants, so a separation never passes for real stems. See [Separation](separate.md).

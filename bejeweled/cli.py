@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 
 from . import __version__, config, jobs, palette as pal
 from .demucs import DemucsError
@@ -154,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("--title", help="the title, for one folder (default: the "
                                         "folder's name)")
     p_conv.add_argument("--artist", help="the artist, for every folder given")
+    p_conv.add_argument("--album", help="the album, for every folder given; with "
+                                        "--artist its cover is used for them all")
     cover = p_conv.add_mutually_exclusive_group()
     cover.add_argument("--cover", metavar="IMAGE",
                        help="cover art for a folder, instead of looking it up")
@@ -468,6 +471,25 @@ def _convert(args) -> int:
         raise FileNotFoundError(f"no cover image at {args.cover}")
 
     cfg = config.load()
+    with tempfile.TemporaryDirectory(prefix="bejeweled-cover-") as work:
+        args.cover = args.cover or _album_cover(args, cfg, work)
+        return _convert_all(args, cfg)
+
+
+def _album_cover(args, cfg, work):
+    """The album's cover, looked up once so every song of it shares one."""
+    if (not args.album or not args.artist or args.no_cover
+            or not cfg.get("metadata", {}).get("find_cover", True)):
+        return None
+    from . import artwork
+
+    found = artwork.find_album(args.artist, args.album, work)
+    if not found:
+        print(f"no cover found for {args.album}, looking one up for each song")
+    return found
+
+
+def _convert_all(args, cfg) -> int:
     if len(args.inputs) == 1:
         _report(*_convert_one(args.inputs[0], args, cfg))
         return 0
@@ -534,7 +556,7 @@ def _convert_one(target, args, cfg):
     if local.is_stem_file(target):
         for flag, given in (("--slots", names), ("--assign", assign),
                             ("--title", args.title), ("--artist", args.artist),
-                            ("--cover", args.cover)):
+                            ("--album", args.album), ("--cover", args.cover)):
             if given:
                 raise ValueError(f"{flag} is for a folder of stems, and "
                                  f"{os.path.basename(target)} is a stem file")
@@ -552,6 +574,8 @@ def _convert_one(target, args, cfg):
                                 args.engine_library, args.engine_key)
     stem_set = local.from_folder(target, title=args.title, artist=args.artist, names=names,
                                  assign=assign)
+    if args.album:
+        stem_set.album = args.album
     if args.cover:
         stem_set.cover = args.cover
     slots = stem_set.extra.get("slots")

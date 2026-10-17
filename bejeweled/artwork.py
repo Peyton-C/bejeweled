@@ -1,4 +1,5 @@
-"""Cover art for a song that arrived without any, looked up by artist and title.
+"""Cover art for a song that arrived without any, looked up by artist and title, or
+by artist and album for every song of one.
 
 A mix from YouTube or a folder of stems carries no art, and a stem file without it is
 a grey square in every DJ library. The iTunes Search API is asked first, then
@@ -14,6 +15,7 @@ import requests
 
 ITUNES = "https://itunes.apple.com/search"
 DEEZER = "https://api.deezer.com/search"
+DEEZER_ALBUM = "https://api.deezer.com/search/album"
 
 # Large enough for any deck's artwork view, small enough not to bloat every stem file.
 # iTunes renders whatever size the URL asks for, Deezer's cover_xl is this size too.
@@ -28,10 +30,26 @@ def find(artist: str | None, title: str | None, out_dir: str, session=None) -> s
     """
     if not artist or not title:
         return None
+    return _download((_itunes, _deezer), artist, title, out_dir, session)
+
+
+def find_album(artist: str | None, album: str | None, out_dir: str,
+               session=None) -> str | None:
+    """Download the cover of the album, returning its path, or None when none matches.
+
+    The album's name must match whole, so a deluxe edition or a remix album, whose
+    cover often differs, is never taken for the album itself.
+    """
+    if not artist or not album:
+        return None
+    return _download((_itunes_album, _deezer_album), artist, album, out_dir, session)
+
+
+def _download(lookups, artist, name, out_dir, session) -> str | None:
     get = (session or requests).get
-    for lookup in (_itunes, _deezer):
+    for lookup in lookups:
         try:
-            url = lookup(get, artist, title)
+            url = lookup(get, artist, name)
             if not url:
                 continue
             r = get(url, timeout=30)
@@ -70,6 +88,36 @@ def _deezer(get, artist, title) -> str | None:
                         artist, title):
                 return (hit.get("album") or {}).get("cover_xl")
     return None
+
+
+def _itunes_album(get, artist, album) -> str | None:
+    r = get(ITUNES, params={"term": f"{primary(artist)} {album}", "media": "music",
+                            "entity": "album", "limit": 25}, timeout=30)
+    r.raise_for_status()
+    for hit in r.json().get("results", []):
+        # iTunes names a single or an EP as such, `hot to go! - Single`
+        name = re.sub(r"\s+-\s+(?:Single|EP)$", "", hit.get("collectionName") or "")
+        if _album_matches(hit.get("artistName"), name, artist, album):
+            art = hit.get("artworkUrl100")
+            return art and re.sub(r"/\d+x\d+bb\.", f"/{SIZE}x{SIZE}bb.", art)
+    return None
+
+
+def _deezer_album(get, artist, album) -> str | None:
+    for q in (f'artist:"{primary(artist)}" album:"{album}"', f"{primary(artist)} {album}"):
+        r = get(DEEZER_ALBUM, params={"q": q}, timeout=30)
+        r.raise_for_status()
+        for hit in r.json().get("data", []):
+            if _album_matches((hit.get("artist") or {}).get("name"), hit.get("title"),
+                              artist, album):
+                return hit.get("cover_xl")
+    return None
+
+
+def _album_matches(their_artist, their_album, artist, album) -> bool:
+    return bool(their_artist and their_album
+                and _key(primary(artist)) in _key(their_artist)
+                and _key(their_album) == _key(album))
 
 
 def _matches(their_artist, their_title, artist, title) -> bool:

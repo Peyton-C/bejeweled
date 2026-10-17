@@ -209,6 +209,49 @@ def test_convert_embeds_the_cover_it_is_given(tmp_path, monkeypatch, capsys):
     assert "is a stem file" in capsys.readouterr().err
 
 
+def test_convert_shares_one_album_cover(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from bejeweled import artwork
+    from bejeweled import ffmpeg as ff
+    from bejeweled.cli import main
+
+    try:
+        ffmpeg = ff.find_ffmpeg()
+    except ff.FFmpegError:
+        pytest.skip("FFmpeg not available")
+    monkeypatch.setenv("BEJEWELED_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(artwork, "find", lambda *a, **k: pytest.fail("looked up a song"))
+    cover = str(tmp_path / "cover.png")
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=red:size=64x64", "-frames:v", "1", cover], check=True)
+    lookups = []
+
+    def find_album(artist, album, out_dir, session=None):
+        lookups.append((artist, album))
+        return shutil.copy(cover, out_dir)
+
+    monkeypatch.setattr(artwork, "find_album", find_album)
+
+    folders = []
+    for song in ("757", "money machine"):
+        folder = tmp_path / song
+        folder.mkdir()
+        for name in ("drums", "bass", "other", "vocals"):
+            subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+                            "sine=duration=1:sample_rate=44100", "-ac", "2",
+                            str(folder / f"{name}.wav")], check=True)
+        folders.append(str(folder))
+
+    assert main(["convert", *folders, "--artist", "100 gecs", "--album", "1000 gecs"]) == 0
+    assert lookups == [("100 gecs", "1000 gecs")]
+    for song in ("757", "money machine"):
+        info = ff.probe(ffmpeg, str(tmp_path / f"{song}.stem.mp4"))
+        assert info["format"]["tags"]["album"] == "1000 gecs"
+        assert any(s.get("disposition", {}).get("attached_pic") for s in info["streams"])
+
+
 def test_combine_scopes_its_actions_like_a_source(parser):
     args = parser.parse_args(["combine", "graft", "clean.stem.mp4", "explicit.flac",
                               "--title", "Song", "--separator", "hybrid"])
