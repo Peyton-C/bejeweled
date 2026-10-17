@@ -154,8 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("--title", help="the title, for one folder (default: the "
                                         "folder's name)")
     p_conv.add_argument("--artist", help="the artist, for one folder")
-    p_conv.add_argument("--no-cover", action="store_true",
-                        help="do not look up cover art for a folder")
+    cover = p_conv.add_mutually_exclusive_group()
+    cover.add_argument("--cover", metavar="IMAGE",
+                       help="cover art for a folder, instead of looking it up")
+    cover.add_argument("--no-cover", action="store_true",
+                       help="do not look up cover art for a folder")
     p_conv.add_argument("--suffix", help="appended to the title, e.g. '(ENGINE)'")
     p_conv.add_argument("--no-suffix", action="store_true", help="never append a suffix")
 
@@ -461,6 +464,8 @@ def _convert(args) -> int:
         raise ValueError("--title and --artist name one song, so they take one input")
     if args.jobs is not None and args.jobs < 1:
         raise ValueError("--jobs is at least 1")
+    if args.cover and not os.path.isfile(args.cover):
+        raise FileNotFoundError(f"no cover image at {args.cover}")
 
     cfg = config.load()
     if len(args.inputs) == 1:
@@ -528,7 +533,8 @@ def _convert_one(target, args, cfg):
     assign = _assignments(args.assign)
     if local.is_stem_file(target):
         for flag, given in (("--slots", names), ("--assign", assign),
-                            ("--title", args.title), ("--artist", args.artist)):
+                            ("--title", args.title), ("--artist", args.artist),
+                            ("--cover", args.cover)):
             if given:
                 raise ValueError(f"{flag} is for a folder of stems, and "
                                  f"{os.path.basename(target)} is a stem file")
@@ -546,6 +552,8 @@ def _convert_one(target, args, cfg):
                                 args.engine_library, args.engine_key)
     stem_set = local.from_folder(target, title=args.title, artist=args.artist, names=names,
                                  assign=assign)
+    if args.cover:
+        stem_set.cover = args.cover
     slots = stem_set.extra.get("slots")
     if names and not slots:
         missing = [name for name in names if not stem_set.get(name)]

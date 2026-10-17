@@ -164,6 +164,42 @@ def test_convert_names_the_slots_of_a_folder(tmp_path, monkeypatch, capsys):
     assert "is a stem file" in capsys.readouterr().err
 
 
+def test_convert_embeds_the_cover_it_is_given(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    from bejeweled import artwork
+    from bejeweled import ffmpeg as ff
+    from bejeweled.cli import main
+
+    try:
+        ffmpeg = ff.find_ffmpeg()
+    except ff.FFmpegError:
+        pytest.skip("FFmpeg not available")
+    monkeypatch.setenv("BEJEWELED_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(artwork, "find", lambda *a, **k: pytest.fail("looked up a cover"))
+
+    folder = tmp_path / "Song"
+    folder.mkdir()
+    for name in ("drums", "bass", "other", "vocals"):
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "sine=duration=1:sample_rate=44100", "-ac", "2",
+                        str(folder / f"{name}.wav")], check=True)
+    cover = str(tmp_path / "cover.png")
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=red:size=64x64", "-frames:v", "1", cover], check=True)
+
+    out = str(tmp_path / "Song.stem.mp4")
+    assert main(["convert", str(folder), "--artist", "100 gecs", "--cover", cover,
+                 "-o", out]) == 0
+    assert any(s.get("disposition", {}).get("attached_pic")
+               for s in ff.probe(ffmpeg, out)["streams"])
+
+    assert main(["convert", str(folder), "--cover", str(tmp_path / "missing.jpg")]) == 1
+    assert "no cover image" in capsys.readouterr().err
+    assert main(["convert", out, "--cover", cover]) == 1
+    assert "is a stem file" in capsys.readouterr().err
+
+
 def test_combine_scopes_its_actions_like_a_source(parser):
     args = parser.parse_args(["combine", "graft", "clean.stem.mp4", "explicit.flac",
                               "--title", "Song", "--separator", "hybrid"])

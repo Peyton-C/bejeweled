@@ -59,12 +59,16 @@ def _itunes(get, artist, title) -> str | None:
 
 
 def _deezer(get, artist, title) -> str | None:
-    r = get(DEEZER, params={"q": f'artist:"{primary(artist)}" track:"{plain(title)}"'},
-            timeout=30)
-    r.raise_for_status()
-    for hit in r.json().get("data", []):
-        if _matches((hit.get("artist") or {}).get("name"), hit.get("title"), artist, title):
-            return (hit.get("album") or {}).get("cover_xl")
+    # The artist: filter misses some artists outright, `artist:"100 gecs"` finds none of
+    # their songs, so a plain search follows. _matches still guards both.
+    for q in (f'artist:"{primary(artist)}" track:"{plain(title)}"',
+              f"{primary(artist)} {plain(title)}"):
+        r = get(DEEZER, params={"q": q}, timeout=30)
+        r.raise_for_status()
+        for hit in r.json().get("data", []):
+            if _matches((hit.get("artist") or {}).get("name"), hit.get("title"),
+                        artist, title):
+                return (hit.get("album") or {}).get("cover_xl")
     return None
 
 

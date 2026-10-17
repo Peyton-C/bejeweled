@@ -68,7 +68,7 @@ bejeweled can also restyle existing stem files, including ones it did not create
 ## Metadata
 bejeweled writes the title, artist, year, key, BPM, cover art and a provenance comment into the file. Tags a source does not provide are left out rather than guessed at.
 
-A song that arrives without cover art, a YouTube mix or a folder of stems, gets the cover of its release from iTunes, or from Deezer when iTunes has none. bejeweled takes a cover only when both the artist and the title match, so a song with no artist tag gets none. Set `find_cover = false` under `[metadata]` to turn this off, or pass `--no-cover` to `convert`.
+A song that arrives without cover art, a YouTube mix or a folder of stems, gets the cover of its release from iTunes, or from Deezer when iTunes has none. bejeweled takes a cover only when both the artist and the title match, so a song with no artist tag gets none. Set `find_cover = false` under `[metadata]` to turn this off, or pass `--no-cover` to `convert`. Pass `--cover` with an image to `convert` to use your own instead, which also covers a song neither service has. One cover may be given for several folders, such as an album's.
 
 Where bejeweled obtained the audio rather than the user, the title also gets a marker, `(FN)` for Fortnite Festival. Mixes of the same song can differ between platforms, so the marker keeps them apart in a library instead of letting one quietly stand in for the other.
 
