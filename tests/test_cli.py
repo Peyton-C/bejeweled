@@ -210,6 +210,7 @@ def test_convert_embeds_the_cover_it_is_given(tmp_path, monkeypatch, capsys):
 
 
 def test_convert_shares_one_album_cover(tmp_path, monkeypatch):
+    import os
     import shutil
     import subprocess
 
@@ -244,12 +245,29 @@ def test_convert_shares_one_album_cover(tmp_path, monkeypatch):
                             str(folder / f"{name}.wav")], check=True)
         folders.append(str(folder))
 
-    assert main(["convert", *folders, "--artist", "100 gecs", "--album", "1000 gecs"]) == 0
+    out = tmp_path / "out"
+    assert main(["convert", *folders, "--artist", "100 gecs", "--album", "1000 gecs",
+                 "-o", str(out)]) == 0
     assert lookups == [("100 gecs", "1000 gecs")]
     for song in ("757", "money machine"):
-        info = ff.probe(ffmpeg, str(tmp_path / f"{song}.stem.mp4"))
+        info = ff.probe(ffmpeg, str(out / f"{song}.stem.mp4"))
         assert info["format"]["tags"]["album"] == "1000 gecs"
         assert any(s.get("disposition", {}).get("attached_pic") for s in info["streams"])
+
+    # And back out again, each into its own folder of stems
+    files = tmp_path / "files"
+    assert main(["convert", *(str(out / f"{song}.stem.mp4") for song in ("757", "money machine")),
+                 "--format", "files", "-o", str(files)]) == 0
+    assert sorted(os.listdir(files)) == ["757 - stems", "money machine - stems"]
+
+
+def test_convert_refuses_a_file_as_the_folder_for_several(tmp_path, capsys):
+    from bejeweled.cli import main
+
+    taken = tmp_path / "taken"
+    taken.write_text("")
+    assert main(["convert", "a", "b", "-o", str(taken)]) == 1
+    assert "-o takes a folder for several inputs" in capsys.readouterr().err
 
 
 def test_combine_scopes_its_actions_like_a_source(parser):

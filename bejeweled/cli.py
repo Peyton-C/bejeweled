@@ -133,7 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_conv.add_argument("inputs", nargs="+", metavar="input",
                         help="folders of stems, or .stem.mp4 files")
     p_conv.add_argument("-o", "--out", help="output .stem.mp4 path for one folder, or "
-                                            "the stems folder for one .stem.mp4")
+                                            "the stems folder for one .stem.mp4; for "
+                                            "several, the folder they all go in")
     p_conv.add_argument("--format", choices=CONVERT_FORMATS, default=None,
                         help="ni-stem, engine to add it to an Engine DJ library with its "
                              "stems, or files to unpack a .stem.mp4 into separate stems "
@@ -462,7 +463,9 @@ def _list(args) -> int:
 
 def _convert(args) -> int:
     if args.out and len(args.inputs) > 1:
-        raise ValueError("-o names one output, so it takes one input")
+        if os.path.exists(args.out) and not os.path.isdir(args.out):
+            raise ValueError(f"-o takes a folder for several inputs, and {args.out} is a file")
+        os.makedirs(args.out, exist_ok=True)
     if args.title and len(args.inputs) > 1:
         raise ValueError("--title names one song, so it takes one input")
     if args.jobs is not None and args.jobs < 1:
@@ -563,6 +566,8 @@ def _convert_one(target, args, cfg):
         if args.format == "ni-stem":
             raise ValueError(f"{os.path.basename(target)} is already a stem file")
         if args.format == "files":
+            if len(args.inputs) > 1:
+                return jobs.stem_file_to_files(target, parent=args.out), True
             return jobs.stem_file_to_files(target, args.out), True
         return jobs.stem_file_to_engine(target, cfg, engine_library=args.engine_library,
                                         engine_key=args.engine_key), False
@@ -592,10 +597,14 @@ def _convert_one(target, args, cfg):
     if cfg.get("metadata", {}).get("write_comment", True):
         stem_set.comment = stem_set.describe_source(__version__)
 
-    out_path = args.out or os.path.join(
+    out_path = os.path.join(
         os.path.dirname(os.path.normpath(target)) or ".",
         f"{jobs.safe(stem_set.title)}.stem.mp4",
     )
+    if args.out and os.path.isdir(args.out):
+        out_path = os.path.join(args.out, os.path.basename(out_path))
+    elif args.out:
+        out_path = args.out
     if slots:
         merge = slots
     elif names:
