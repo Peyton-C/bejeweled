@@ -34,7 +34,7 @@ A name with words for two slots goes to the first slot in this table, so Vocal F
 
 A dry copy of a stem beside the stem itself, `Ld Voc Dry` beside `Ld Voc`, is left out, and so is an acapella or instrumental bounced from the stems, since either would play that part twice. Of a clean and an explicit take of the same stem, `Vocals` beside `Vocals (Dirty)`, bejeweled keeps the explicit one, assign the other to its slot and skip this one to swap them. Rock Band's audience track, named `crowd`, is left out too. A file named Master or Mix is the mixdown.
 
-The title is the folder's name without the word Stems. Pass `--title` and `--artist` when the folder does not say, as without an artist no cover art is found.
+The title is the folder's name without the word Stems. Pass `--title` and `--artist` when the folder does not say, as without an artist no cover art is found. `--artist` may be given for several folders at once, such as an album's.
 
 ## Slot names
 The four slots suit most songs, but not one whose hook is an instrument that would otherwise be buried in Other. `bejeweled convert` can name the slots itself when it builds a stem file from a folder.

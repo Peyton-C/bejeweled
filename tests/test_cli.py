@@ -121,6 +121,15 @@ def test_convert_takes_stem_files_and_an_engine_library(parser):
     assert parser.parse_args(["convert", "a.stem.mp4", "--format", "files"]).format == "files"
 
 
+def test_convert_takes_one_artist_for_several_folders(capsys):
+    from bejeweled.cli import main
+
+    assert main(["convert", "a", "b", "--title", "Song"]) == 1
+    assert "--title names one song" in capsys.readouterr().err
+    assert main(["convert", "a", "b", "--artist", "100 gecs", "--jobs", "0"]) == 1
+    assert "--jobs is at least 1" in capsys.readouterr().err
+
+
 def test_convert_refuses_what_the_input_already_is(tmp_path, capsys):
     from bejeweled.cli import main
 

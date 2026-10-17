@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "Repeat for more")
     p_conv.add_argument("--title", help="the title, for one folder (default: the "
                                         "folder's name)")
-    p_conv.add_argument("--artist", help="the artist, for one folder")
+    p_conv.add_argument("--artist", help="the artist, for every folder given")
     cover = p_conv.add_mutually_exclusive_group()
     cover.add_argument("--cover", metavar="IMAGE",
                        help="cover art for a folder, instead of looking it up")
@@ -460,8 +460,8 @@ def _list(args) -> int:
 def _convert(args) -> int:
     if args.out and len(args.inputs) > 1:
         raise ValueError("-o names one output, so it takes one input")
-    if (args.title or args.artist) and len(args.inputs) > 1:
-        raise ValueError("--title and --artist name one song, so they take one input")
+    if args.title and len(args.inputs) > 1:
+        raise ValueError("--title names one song, so it takes one input")
     if args.jobs is not None and args.jobs < 1:
         raise ValueError("--jobs is at least 1")
     if args.cover and not os.path.isfile(args.cover):
